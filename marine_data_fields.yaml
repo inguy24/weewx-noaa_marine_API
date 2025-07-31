@@ -1,0 +1,391 @@
+# WeeWX Marine Data Extension - Complete Field Definitions
+# API-First Organization for NOAA CO-OPS and NDBC data sources
+
+api_modules:
+  coops_tides:
+    display_name: "NOAA Tides & Currents (CO-OPS)"
+    description: "Real-time water levels, tide predictions, and coastal water temperature from NOAA CO-OPS stations"
+    api_url: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+    recommended_interval: 600  # 10 minutes for water level data
+    service_name: "coops_tides"
+    units_parameter: true
+    api_type: "rest_json"
+    database_table: "coops_data"  # High-frequency data table
+    
+    # API products supported by this module
+    api_products:
+      water_level:
+        product_code: "water_level"
+        update_frequency: 600  # 10 minutes
+        description: "Real-time observed water levels"
+      predictions:
+        product_code: "predictions"
+        update_frequency: 21600  # 6 hours
+        description: "Tide predictions based on harmonic analysis"
+        database_table: "marine_forecast_data"  # Low-frequency data table
+      water_temperature:
+        product_code: "water_temperature"
+        update_frequency: 600  # 10 minutes
+        description: "Coastal water temperature (limited station availability)"
+    
+    fields:
+      # Real-time water level observations
+      current_water_level:
+        display_name: "Current water level"
+        database_field: "marine_current_water_level"
+        database_type: "REAL"
+        api_path: "data[0].v"
+        service_field: "current_water_level"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_distance"
+        api_product: "water_level"
+        description: "Current observed water level relative to station datum"
+        
+      water_level_sigma:
+        display_name: "Water level measurement accuracy"
+        database_field: "marine_water_level_sigma"
+        database_type: "REAL"
+        api_path: "data[0].s"
+        service_field: "water_level_sigma"
+        complexity_levels: ["all"]
+        unit_group: "group_distance"
+        api_product: "water_level"
+        description: "Measurement accuracy estimate (±)"
+        
+      water_level_flags:
+        display_name: "Water level quality flags"
+        database_field: "marine_water_level_flags"
+        database_type: "VARCHAR(10)"
+        api_path: "data[0].f"
+        service_field: "water_level_flags"
+        complexity_levels: ["all"]
+        unit_group: "group_count"
+        api_product: "water_level"
+        description: "Data quality control flags"
+        
+      coastal_water_temp:
+        display_name: "Coastal water temperature"
+        database_field: "marine_coastal_water_temp"
+        database_type: "REAL"
+        api_path: "data[0].v"
+        service_field: "coastal_water_temp"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_temperature"
+        api_product: "water_temperature"
+        description: "Water temperature at coastal stations (limited availability)"
+        
+      # Tide predictions (stored in marine_forecast_data table)
+      next_high_time:
+        display_name: "Next high tide time"
+        database_field: "marine_next_high_time"
+        database_type: "TEXT"
+        api_path: "predictions[0].t"  # Processed by service logic
+        service_field: "next_high_time"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_count"
+        api_product: "predictions"
+        database_table: "marine_forecast_data"
+        description: "Timestamp of next predicted high tide"
+        
+      next_high_height:
+        display_name: "Next high tide height"
+        database_field: "marine_next_high_height"
+        database_type: "REAL"
+        api_path: "predictions[0].v"  # Processed by service logic
+        service_field: "next_high_height"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_distance"
+        api_product: "predictions"
+        database_table: "marine_forecast_data"
+        description: "Height of next predicted high tide"
+        
+      next_low_time:
+        display_name: "Next low tide time"
+        database_field: "marine_next_low_time"
+        database_type: "TEXT"
+        api_path: "predictions[1].t"  # Processed by service logic
+        service_field: "next_low_time"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_count"
+        api_product: "predictions"
+        database_table: "marine_forecast_data"
+        description: "Timestamp of next predicted low tide"
+        
+      next_low_height:
+        display_name: "Next low tide height"
+        database_field: "marine_next_low_height"
+        database_type: "REAL"
+        api_path: "predictions[1].v"  # Processed by service logic
+        service_field: "next_low_height"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_distance"
+        api_product: "predictions"
+        database_table: "marine_forecast_data"
+        description: "Height of next predicted low tide"
+        
+      tide_range:
+        display_name: "Current tidal range"
+        database_field: "marine_tide_range"
+        database_type: "REAL"
+        api_path: "calculated"  # Calculated field: high_height - low_height
+        service_field: "tide_range"
+        complexity_levels: ["all"]
+        unit_group: "group_distance"
+        api_product: "predictions"
+        database_table: "marine_forecast_data"
+        description: "Difference between next high and low tide heights"
+
+  ndbc_marine:
+    display_name: "NDBC Marine Weather"
+    description: "Offshore buoy conditions including waves, wind, and sea surface temperature from NDBC stations"
+    api_url: "https://www.ndbc.noaa.gov/data/realtime2/"
+    recommended_interval: 3600  # 60 minutes for buoy data
+    service_name: "ndbc_marine"
+    units_parameter: false  # NDBC uses fixed metric units
+    api_type: "file_based"
+    database_table: "marine_forecast_data"  # Low-frequency data table
+    
+    # File types supported by this module
+    file_types:
+      stdmet:
+        file_extension: ".txt"
+        update_frequency: 3600  # 60 minutes
+        description: "Standard meteorological data"
+      ocean:
+        file_extension: ".ocean"
+        update_frequency: 3600  # 60 minutes
+        description: "Oceanographic data (temperature at depth)"
+      spec:
+        file_extension: ".spec"
+        update_frequency: 3600  # 60 minutes
+        description: "Spectral wave data"
+    
+    fields:
+      # Wave conditions
+      wave_height:
+        display_name: "Significant wave height"
+        database_field: "marine_wave_height"
+        database_type: "REAL"
+        api_path: "WVHT"
+        service_field: "wave_height"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_distance"
+        file_type: "stdmet"
+        description: "Significant wave height (average of highest 1/3 of waves)"
+        
+      wave_period:
+        display_name: "Dominant wave period"
+        database_field: "marine_wave_period"
+        database_type: "REAL"
+        api_path: "DPD"
+        service_field: "wave_period"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_time"
+        file_type: "stdmet"
+        description: "Dominant wave period in seconds"
+        
+      average_wave_period:
+        display_name: "Average wave period"
+        database_field: "marine_avg_wave_period"
+        database_type: "REAL"
+        api_path: "APD"
+        service_field: "average_wave_period"
+        complexity_levels: ["all"]
+        unit_group: "group_time"
+        file_type: "stdmet"
+        description: "Average wave period in seconds"
+        
+      wave_direction:
+        display_name: "Mean wave direction"
+        database_field: "marine_wave_direction"
+        database_type: "REAL"
+        api_path: "MWD"
+        service_field: "wave_direction"
+        complexity_levels: ["all"]
+        unit_group: "group_direction"
+        file_type: "stdmet"
+        description: "Mean wave direction in degrees (coming from)"
+        
+      # Marine meteorology
+      marine_wind_speed:
+        display_name: "Marine wind speed"
+        database_field: "marine_wind_speed"
+        database_type: "REAL"
+        api_path: "WSPD"
+        service_field: "marine_wind_speed"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_speed"
+        file_type: "stdmet"
+        description: "Wind speed at 5m height"
+        unit_conversion: "wind_speed_m_s_to_weewx"
+        
+      marine_wind_direction:
+        display_name: "Marine wind direction"
+        database_field: "marine_wind_direction"
+        database_type: "REAL"
+        api_path: "WDIR"
+        service_field: "marine_wind_direction"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_direction"
+        file_type: "stdmet"
+        description: "Wind direction in degrees (coming from)"
+        
+      marine_wind_gust:
+        display_name: "Marine wind gusts"
+        database_field: "marine_wind_gust"
+        database_type: "REAL"
+        api_path: "GST"
+        service_field: "marine_wind_gust"
+        complexity_levels: ["all"]
+        unit_group: "group_speed"
+        file_type: "stdmet"
+        description: "Peak 5-second wind gust"
+        unit_conversion: "wind_speed_m_s_to_weewx"
+        
+      sea_surface_temp:
+        display_name: "Sea surface temperature"
+        database_field: "marine_sea_surface_temp"
+        database_type: "REAL"
+        api_path: "WTMP"
+        service_field: "sea_surface_temp"
+        complexity_levels: ["minimal", "all"]
+        unit_group: "group_temperature"
+        file_type: "stdmet"
+        description: "Sea surface temperature"
+        
+      marine_air_temp:
+        display_name: "Marine air temperature"
+        database_field: "marine_air_temp"
+        database_type: "REAL"
+        api_path: "ATMP"
+        service_field: "marine_air_temp"
+        complexity_levels: ["all"]
+        unit_group: "group_temperature"
+        file_type: "stdmet"
+        description: "Air temperature at 4m height"
+        
+      marine_barometric_pressure:
+        display_name: "Marine barometric pressure"
+        database_field: "marine_barometric_pressure"
+        database_type: "REAL"
+        api_path: "PRES"
+        service_field: "marine_barometric_pressure"
+        complexity_levels: ["all"]
+        unit_group: "group_pressure"
+        file_type: "stdmet"
+        description: "Atmospheric pressure at sea level"
+        
+      marine_dewpoint:
+        display_name: "Marine dew point"
+        database_field: "marine_dewpoint"
+        database_type: "REAL"
+        api_path: "DEWP"
+        service_field: "marine_dewpoint"
+        complexity_levels: ["all"]
+        unit_group: "group_temperature"
+        file_type: "stdmet"
+        description: "Dew point temperature"
+        
+      marine_visibility:
+        display_name: "Marine visibility"
+        database_field: "marine_visibility"
+        database_type: "REAL"
+        api_path: "VIS"
+        service_field: "marine_visibility"
+        complexity_levels: ["all"]
+        unit_group: "group_distance"
+        file_type: "stdmet"
+        description: "Horizontal visibility in nautical miles"
+        unit_conversion: "nautical_miles_to_distance"
+
+# Station discovery and health monitoring endpoints
+station_discovery:
+  coops:
+    stations_api: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
+    station_info_api: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}.json"
+    products_filter: "?type=tidepredictions"
+    health_check_api: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+    health_check_params: "?product=water_level&station={station_id}&time_zone=gmt&format=json&range=1"
+    
+  ndbc:
+    stations_page: "https://www.ndbc.noaa.gov/to_station.shtml"
+    station_data_pattern: "https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
+    station_info_pattern: "https://www.ndbc.noaa.gov/station_page.php?station={station_id}"
+    health_check_pattern: "https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
+
+# Complexity level definitions for user guidance
+complexity_definitions:
+  minimal:
+    description: "Essential marine data for basic coastal monitoring"
+    target_field_count: 8
+    includes: "Current water level, next tides, wave height, sea surface temperature, marine winds"
+    recommended_for: "Basic marine monitoring, small boats, fishing"
+    
+  all:
+    description: "Complete marine dataset with all available parameters"
+    target_field_count: 20
+    includes: "All minimal fields plus detailed wave analysis, marine meteorology, water quality"
+    recommended_for: "Professional marine operations, research, comprehensive monitoring"
+    
+  custom:
+    description: "User-selected specific marine parameters"
+    includes: "Interactive selection from all available fields organized by data source"
+    recommended_for: "Specialized applications, specific monitoring requirements"
+
+# Unit conversion definitions for marine data
+unit_conversions:
+  wind_speed_m_s_to_weewx:
+    description: "Convert NDBC wind speed (m/s) to WeeWX unit system"
+    from_unit: "m/s"
+    to_unit: "weewx_wind_unit"
+    formula: "convert_to_weewx_wind(x)"
+    applies_when:
+      data_source: "ndbc"
+      field_type: "wind_speed"
+    
+  nautical_miles_to_distance:
+    description: "Convert nautical miles to WeeWX distance unit"
+    from_unit: "nautical_miles"
+    to_unit: "weewx_distance_unit"
+    formula: "convert_to_weewx_distance(x * 1.15078)"  # nautical miles to statute miles
+    applies_when:
+      data_source: "ndbc"
+      field_name: "marine_visibility"
+
+# Database schema definitions
+database_schemas:
+  coops_data:
+    description: "High-frequency CO-OPS data (6-minute updates)"
+    table_name: "coops_data"
+    primary_key: ["dateTime", "station_id"]
+    indexes:
+      - ["dateTime"]
+      - ["station_id"]
+      - ["dateTime", "station_id"]
+    
+  marine_forecast_data:
+    description: "Low-frequency marine data (hourly and 6-hourly updates)"
+    table_name: "marine_forecast_data"
+    primary_key: ["dateTime", "station_id", "data_type"]
+    indexes:
+      - ["dateTime"]
+      - ["station_id"]
+      - ["data_type"]
+      - ["dateTime", "station_id"]
+
+# Station health monitoring parameters
+station_health:
+  coops:
+    max_data_age_hours: 4
+    retry_interval_minutes: 30
+    consecutive_failure_threshold: 5
+    
+  ndbc:
+    max_data_age_hours: 3
+    retry_interval_minutes: 60
+    consecutive_failure_threshold: 3
+    
+  general:
+    health_check_interval: 3600  # 1 hour
+    maintenance_log_retention_days: 30
+    backup_station_activation_threshold: 2  # failures before switching
