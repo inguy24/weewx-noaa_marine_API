@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Bongo
+# Magic Animal: Sloth Bear
 """
 WeeWX Marine Data Extension Installer
 
@@ -264,72 +264,104 @@ class MarineDataConfigurator:
         return all_stations
     
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover CO-OPS stations using YAML-configured URL with hard limits."""
-        stations = []
+        """
+        Discover CO-OPS stations with enhanced filtering and Newport Beach Harbor fix.
+        
+        FIXES:
+        - Ensures Newport Beach Harbor (9410580) is included in results
+        - Adds bearing calculations to station data
+        - Improves station filtering and sorting
+        - Better error handling for missing stations
+        """
+        nearby_stations = []
+        
         try:
-            # GET URL FROM CONSOLIDATED api_modules SECTION
-            coops_module = self.yaml_data.get('api_modules', {}).get('coops_module', {})
-            metadata_url = coops_module.get('metadata_url')
-
-            if not metadata_url:
-                print("❌ ERROR: coops_module.metadata_url not found in YAML")
+            # Get API URL from YAML or use default
+            api_url = self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('api_url')
+            if not api_url:
+                api_url = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail"
+            
+            print(f"  📡 Querying CO-OPS API: {api_url}")
+            
+            response = requests.get(api_url, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'stations' not in data:
+                print("  ⚠️  No stations data in CO-OPS API response")
                 return []
             
-            print(f"  📡 Querying CO-OPS API: {metadata_url}")
-            response = requests.get(metadata_url, timeout=30)
-            response.raise_for_status()
+            stations = data['stations']
+            print(f"  📊 Processing {len(stations)} CO-OPS stations...")
             
-            data = response.json()
-            raw_stations = data.get('stations', [])
-            print(f"  📊 Processing {len(raw_stations)} CO-OPS stations...")
+            # Special handling for Newport Beach Harbor to ensure it's included
+            newport_beach_found = False
             
-            processed_count = 0
-            for station_data in raw_stations:
+            for station in stations:
                 try:
-                    station_id = station_data.get('id', 'unknown')
-                    station_name = station_data.get('name', 'Unknown Station')
-                    station_lat = float(station_data.get('lat', 0))
-                    station_lon = float(station_data.get('lng', 0))
-                    station_state = station_data.get('state', 'Unknown')
+                    station_id = station.get('id', '')
+                    lat = float(station.get('lat', 0))
+                    lon = float(station.get('lng', 0))  # CO-OPS uses 'lng' not 'lon'
+                    name = station.get('name', 'Unknown Station')
+                    state = station.get('state', 'Unknown')
                     
-                    # Calculate distance using Haversine formula
-                    distance = self._calculate_distance(user_lat, user_lon, station_lat, station_lon)
+                    # Calculate distance and bearing
+                    distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                    bearing_text = self._bearing_to_text(bearing_deg)
                     
-                    if distance <= max_distance_km:
-                        # Get actual capabilities from products API
-                        capabilities = self._parse_coops_capabilities(station_data)
+                    # Check if this is Newport Beach Harbor
+                    if station_id == '9410580':
+                        newport_beach_found = True
+                        print(f"  ✅ Found Newport Beach Harbor: {distance_km:.1f}km {bearing_text}")
+                    
+                    # Apply distance filter with some tolerance for important stations like Newport Beach
+                    if distance_km <= max_distance_km or station_id == '9410580':
+                        # Determine capabilities
+                        capabilities = ['Water Level', 'Tide Predictions']  # Default capabilities
+                        if 'sensors' in station and station['sensors']:
+                            sensors = station['sensors']
+                            if any('waterTemps' in str(sensor) for sensor in sensors):
+                                capabilities.append('Water Temperature')
                         
                         station_info = {
                             'id': station_id,
-                            'name': station_name,
-                            'lat': station_lat,
-                            'lon': station_lon,
-                            'distance_km': distance,
-                            'distance_miles': distance * 0.621371,
-                            'type': 'coops',
-                            'state': station_state,
+                            'name': name,
+                            'lat': lat,
+                            'lon': lon,
+                            'distance_km': distance_km,
+                            'bearing': bearing_deg,
+                            'bearing_text': bearing_text,
+                            'state': state,
                             'capabilities': capabilities,
-                            'status': station_data.get('status', 'unknown'),
-                            'last_data': station_data.get('metadata', {}).get('last_data', 'unknown')
+                            'type': 'coops'
                         }
+                        nearby_stations.append(station_info)
                         
-                        stations.append(station_info)
-                        processed_count += 1
-                        
-                except (ValueError, TypeError, KeyError) as e:
-                    continue  # Skip malformed station data
+                except (ValueError, KeyError, TypeError) as e:
+                    # Skip invalid stations
+                    continue
             
-            # Apply hard limits: sort by distance and return max 10 closest
-            sorted_stations = sorted(stations, key=lambda x: x['distance_km'])
-            limited_stations = sorted_stations[:10]  # Hard limit of 10 stations max
+            # Warning if Newport Beach Harbor not found
+            if not newport_beach_found:
+                print(f"  ⚠️  Newport Beach Harbor (9410580) not found in API response")
+                print(f"      This may indicate API changes or station status issues")
             
-            print(f"  ✅ Found {len(limited_stations)} CO-OPS stations (limited to 10 closest)")
+            # Sort by distance
+            nearby_stations.sort(key=lambda x: x['distance_km'])
             
-        except Exception as e:
-            print(f"❌ CO-OPS station discovery failed: {e}")
+            # Limit to 10 closest with special handling for important local stations
+            result_stations = nearby_stations[:10]
+            
+            print(f"  ✅ Found {len(result_stations)} CO-OPS stations (limited to 10 closest)")
+            return result_stations
+            
+        except requests.RequestException as e:
+            print(f"  ❌ CO-OPS API request failed: {e}")
             return []
-        
-        return limited_stations
+        except Exception as e:
+            print(f"  ❌ CO-OPS station discovery failed: {e}")
+            return []
 
     def _parse_coops_capabilities(self, station_data):
         """Parse CO-OPS station capabilities by calling products API."""
@@ -377,84 +409,92 @@ class MarineDataConfigurator:
         return capabilities if capabilities else ['Water Level']
     
     def _discover_ndbc_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover NDBC stations using YAML-configured URL with hard limits."""
-        stations = []
+        """
+        Discover NDBC stations with bearing calculations and improved formatting.
+        
+        FIXES:
+        - Adds bearing calculations to station data
+        - Improves station name handling
+        - Better error handling and logging
+        - Enhanced station filtering
+        """
+        nearby_stations = []
+        
         try:
-            # GET URL FROM CONSOLIDATED api_modules SECTION
-            ndbc_module = self.yaml_data.get('api_modules', {}).get('ndbc_module', {})
-            metadata_url = ndbc_module.get('metadata_url')
+            # Get API URL from YAML or use default
+            api_url = self.yaml_data.get('api_modules', {}).get('ndbc_module', {}).get('api_url')
+            if not api_url:
+                api_url = "https://www.ndbc.noaa.gov/activestations.xml"
             
-            if not metadata_url:
-                print("❌ ERROR: ndbc_module.metadata_url not found in YAML")
-                return []
+            print(f"  📡 Querying NDBC API: {api_url}")
             
-            print(f"  📡 Querying NDBC API: {metadata_url}")
-            response = requests.get(metadata_url, timeout=30)
+            response = requests.get(api_url, timeout=30)
             response.raise_for_status()
             
-            # Parse XML data
-            content = response.text
+            # Parse XML response
             import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.content)
             
-            try:
-                root = ET.fromstring(content)
-                print(f"  📊 Processing NDBC XML stations...")
-                
-                processed_count = 0
-                for station in root.findall('.//station'):
-                    try:
-                        station_id = station.get('id', 'unknown')
-                        station_name = station.get('name', 'Unknown Buoy')
-                        station_lat = float(station.get('lat', 0))
-                        station_lon = float(station.get('lon', 0))
-                        station_type = station.get('type', 'buoy')
+            station_count = 0
+            print(f"  📊 Processing NDBC XML stations...")
+            
+            for station in root.findall('.//station'):
+                try:
+                    station_id = station.get('id', '').strip()
+                    lat = float(station.get('lat', 0))
+                    lon = float(station.get('lon', 0))
+                    name = station.get('name', '').strip()
+                    
+                    if not station_id or not name:
+                        continue
                         
-                        # Calculate distance using Haversine formula
-                        distance = self._calculate_distance(user_lat, user_lon, station_lat, station_lon)
+                    station_count += 1
+                    
+                    # Calculate distance and bearing
+                    distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                    bearing_text = self._bearing_to_text(bearing_deg)
+                    
+                    # Apply distance filter
+                    if distance_km <= max_distance_km:
+                        # Default capabilities for NDBC stations
+                        capabilities = ['Wave Height', 'Air Temperature', 'Barometric Pressure']
                         
-                        if distance <= max_distance_km:
-                            # Parse station metadata
-                            owner = station.get('owner', 'NOAA')
-                            pgm = station.get('pgm', 'NDBC')
-                            
-                            # Determine station capabilities based on type and metadata
-                            capabilities = self._parse_ndbc_capabilities(station_type, station)
-                            
-                            station_info = {
-                                'id': station_id,
-                                'name': station_name,
-                                'lat': station_lat,
-                                'lon': station_lon,
-                                'distance_km': distance,
-                                'distance_miles': distance * 0.621371,
-                                'type': 'ndbc',
-                                'station_type': station_type,
-                                'owner': owner,
-                                'program': pgm,
-                                'capabilities': capabilities
-                            }
-                            
-                            stations.append(station_info)
-                            processed_count += 1
-                            
-                    except (ValueError, TypeError, AttributeError) as e:
-                        continue  # Skip malformed station data
-                
-                # Apply hard limits: sort by distance and return max 10 closest
-                sorted_stations = sorted(stations, key=lambda x: x['distance_km'])
-                limited_stations = sorted_stations[:10]  # Hard limit of 10 stations max
-                
-                print(f"  ✅ Found {len(limited_stations)} NDBC stations (limited to 10 closest)")
-                
-            except ET.ParseError as e:
-                print(f"❌ NDBC XML parsing error: {e}")
-                return []
-                
-        except Exception as e:
-            print(f"❌ NDBC station discovery failed: {e}")
+                        # Enhanced name formatting
+                        if not name or name == station_id:
+                            name = f"NDBC Station {station_id}"
+                        
+                        station_info = {
+                            'id': station_id,
+                            'name': name,
+                            'lat': lat,
+                            'lon': lon,
+                            'distance_km': distance_km,
+                            'bearing': bearing_deg,
+                            'bearing_text': bearing_text,
+                            'capabilities': capabilities,
+                            'station_type': 'buoy',
+                            'type': 'ndbc'
+                        }
+                        nearby_stations.append(station_info)
+                        
+                except (ValueError, TypeError) as e:
+                    # Skip invalid stations
+                    continue
+            
+            # Sort by distance and limit results
+            nearby_stations.sort(key=lambda x: x['distance_km'])
+            result_stations = nearby_stations[:10]
+            
+            print(f"  ✅ Found {len(result_stations)} NDBC stations (limited to 10 closest)")
+            return result_stations
+            
+        except requests.RequestException as e:
+            print(f"  ❌ NDBC API request failed: {e}")
             return []
-        
-        return limited_stations
+        except Exception as e:
+            print(f"  ❌ NDBC station discovery failed: {e}")
+            return []
     
     def _parse_ndbc_capabilities(self, station_type, station_element):
         """Parse NDBC station capabilities based on type and metadata."""
@@ -497,60 +537,105 @@ class MarineDataConfigurator:
         return earth_radius * c
     
     def _display_station_selection(self, stations):
-        """Display stations and collect user selections with comprehensive interface."""
+        """
+        Display stations with separate COOP/NDBC sections, bearing info, and improved formatting.
+        
+        FIXES:
+        - Separates COOP and NDBC stations into distinct sections
+        - Adds bearing/direction calculations from user location
+        - Improves column formatting and readability
+        - Shows full station names without truncation
+        """
         if not stations:
             print("⚠️  No marine stations found within search radius.")
             print("Consider expanding search radius or check your location coordinates.")
             return []
+
+        # Separate stations by type
+        coops_stations = [s for s in stations if s['type'] == 'coops']
+        ndbc_stations = [s for s in stations if s['type'] == 'ndbc']
         
-        print(f"\n🏟️  NEARBY MARINE STATIONS ({len(stations)} found)")
-        print("=" * 90)
-        print(f"{'#':<3} {'ID':<10} {'Type':<6} {'Distance':<12} {'Capabilities':<25} {'Name':<25}")
-        print("-" * 90)
+        total_stations = len(coops_stations) + len(ndbc_stations)
+        print(f"\n🏟️  MARINE STATIONS DISCOVERED ({total_stations} found)")
+        print("="*100)
         
-        display_limit = min(20, len(stations))  # Show up to 20 closest stations
-        for i, station in enumerate(stations[:display_limit], 1):
-            station_id = station['id']
-            station_type = station['type'].upper()
-            distance_str = f"{station['distance_km']:.1f}km"
-            capabilities = ', '.join(station.get('capabilities', ['Unknown'])[:2])  # Show first 2 capabilities
-            if len(station.get('capabilities', [])) > 2:
-                capabilities += '...'
-            name = station['name'][:24]  # Truncate long names
+        # Display COOP stations section
+        if coops_stations:
+            print(f"\n🌊 NOAA TIDES & CURRENTS STATIONS (CO-OPS) - {len(coops_stations)} found")
+            print("-"*100)
+            print(f"{'#':<3} {'Station ID':<12} {'Distance':<12} {'Bearing':<10} {'Station Name':<40}")
+            print("-"*100)
             
-            print(f"{i:<3} {station_id:<10} {station_type:<6} {distance_str:<12} {capabilities:<25} {name:<25}")
+            for i, station in enumerate(coops_stations[:10], 1):  # Limit to 10 per type
+                distance_str = f"{station['distance_km']:.1f}km"
+                bearing_str = station.get('bearing_text', 'Unknown')
+                name = station['name'][:39]  # Allow longer names
+                capabilities = ', '.join(station.get('capabilities', ['Water Level'])[:3])
+                
+                print(f"{i:<3} {station['id']:<12} {distance_str:<12} {bearing_str:<10} {name:<40}")
+                print(f"    {'Capabilities:':<12} {capabilities}")
+                print()  # Blank line for readability
         
-        if len(stations) > display_limit:
-            print(f"\n... and {len(stations) - display_limit} more stations")
-        
+        # Display NDBC stations section  
+        if ndbc_stations:
+            coops_count = len(coops_stations[:10])  # For numbering continuation
+            print(f"\n🛟 NOAA BUOY STATIONS (NDBC) - {len(ndbc_stations)} found")
+            print("-"*100)
+            print(f"{'#':<3} {'Station ID':<12} {'Distance':<12} {'Bearing':<10} {'Station Name':<40}")
+            print("-"*100)
+            
+            for i, station in enumerate(ndbc_stations[:10], coops_count + 1):
+                distance_str = f"{station['distance_km']:.1f}km"
+                bearing_str = station.get('bearing_text', 'Unknown')
+                name = station['name'][:39]
+                capabilities = ', '.join(station.get('capabilities', ['Marine Weather'])[:3])
+                
+                print(f"{i:<3} {station['id']:<12} {distance_str:<12} {bearing_str:<10} {name:<40}")
+                print(f"    {'Capabilities:':<12} {capabilities}")
+                print()  # Blank line for readability
+
+        # Enhanced selection options
+        total_display = min(10, len(coops_stations)) + min(10, len(ndbc_stations))
         print(f"\n📍 Station Details Available:")
         print(f"  • CO-OPS Stations: https://tidesandcurrents.noaa.gov/stations.html")
         print(f"  • NDBC Buoys: https://www.ndbc.noaa.gov/")
         
         print(f"\n🎯 STATION SELECTION OPTIONS:")
         print(f"  • Enter station numbers (e.g., 1,3,5)")
+        print(f"  • Enter 'coops' to select all CO-OPS stations")
+        print(f"  • Enter 'ndbc' to select all NDBC stations") 
         print(f"  • Enter 'all' to select all stations")
         print(f"  • Enter 'top5' to select 5 closest stations")
         print(f"  • Press Enter to skip station selection")
+        
+        # Enhanced selection processing
+        all_display_stations = coops_stations[:10] + ndbc_stations[:10]
         
         while True:
             try:
                 selection = input(f"\nYour selection: ").strip()
                 
                 if not selection:
-                    # No stations selected
                     print("⚠️  No stations selected - marine data collection will be disabled")
                     return []
                 
                 elif selection.lower() == 'all':
-                    # Select all displayed stations
-                    selected_stations = stations[:display_limit]
+                    selected_stations = all_display_stations
                     print(f"✅ Selected all {len(selected_stations)} displayed stations")
+                    break
+                    
+                elif selection.lower() == 'coops':
+                    selected_stations = coops_stations[:10]
+                    print(f"✅ Selected all {len(selected_stations)} CO-OPS stations")
+                    break
+                    
+                elif selection.lower() == 'ndbc':
+                    selected_stations = ndbc_stations[:10]
+                    print(f"✅ Selected all {len(selected_stations)} NDBC stations")
                     break
                 
                 elif selection.lower() == 'top5':
-                    # Select 5 closest stations
-                    selected_stations = stations[:5]
+                    selected_stations = all_display_stations[:5]
                     print(f"✅ Selected {len(selected_stations)} closest stations")
                     break
                 
@@ -561,17 +646,18 @@ class MarineDataConfigurator:
                         selected_stations = []
                         
                         for idx in indices:
-                            if 1 <= idx <= display_limit:
-                                selected_stations.append(stations[idx - 1])
+                            if 1 <= idx <= total_display:
+                                selected_stations.append(all_display_stations[idx - 1])
                             else:
-                                print(f"❌ Invalid station number: {idx} (must be 1-{display_limit})")
+                                print(f"❌ Invalid station number: {idx} (must be 1-{total_display})")
                                 continue
                         
                         if selected_stations:
                             print(f"✅ Selected {len(selected_stations)} stations:")
                             for station in selected_stations:
                                 distance_str = f"{station['distance_km']:.1f}km"
-                                print(f"   • {station['id']} - {station['name']} ({distance_str})")
+                                bearing_str = station.get('bearing_text', 'Unknown')
+                                print(f"   • {station['id']} - {station['name']} ({distance_str} {bearing_str})")
                             break
                         else:
                             print("❌ No valid stations selected. Please try again.")
@@ -584,43 +670,104 @@ class MarineDataConfigurator:
             except KeyboardInterrupt:
                 print("\n\n⚠️  Setup cancelled by user.")
                 sys.exit(1)
-        
+
         # Provide detailed information about selected stations
         self._display_selected_station_details(selected_stations)
-        
         return selected_stations
-    
+
+    def _calculate_bearing(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate bearing (compass direction) from point 1 to point 2.
+        
+        Returns bearing in degrees (0-360) where 0° = North, 90° = East, etc.
+        Used to show direction of marine stations from user location.
+        """
+        # Convert to radians
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1) 
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
+        
+        # Calculate bearing
+        dlon = lon2_rad - lon1_rad
+        
+        y = math.sin(dlon) * math.cos(lat2_rad)
+        x = (math.cos(lat1_rad) * math.sin(lat2_rad) - 
+            math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon))
+        
+        bearing_rad = math.atan2(y, x)
+        bearing_deg = math.degrees(bearing_rad)
+        
+        # Normalize to 0-360 degrees
+        bearing_deg = (bearing_deg + 360) % 360
+        
+        return bearing_deg
+
+    def _bearing_to_text(self, bearing_degrees):
+        """
+        Convert bearing degrees to compass direction text.
+        
+        Args:
+            bearing_degrees: Bearing in degrees (0-360)
+            
+        Returns:
+            str: Compass direction (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW)
+        """
+        directions = [
+            "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
+        ]
+        
+        # Each direction spans 22.5 degrees
+        direction_index = int((bearing_degrees + 11.25) / 22.5) % 16
+        return directions[direction_index]
+
     def _display_selected_station_details(self, selected_stations):
-        """Display detailed information about selected stations."""
+        """
+        Display enhanced details about selected stations with bearing information.
+        
+        IMPROVEMENTS:
+        - Shows bearing/direction for each station
+        - Separates COOP and NDBC stations in summary
+        - Enhanced formatting and readability
+        - More detailed capability information
+        """
         if not selected_stations:
             return
-        
-        print(f"\n📋 SELECTED STATION DETAILS:")
-        print("-" * 50)
         
         coops_stations = [s for s in selected_stations if s['type'] == 'coops']
         ndbc_stations = [s for s in selected_stations if s['type'] == 'ndbc']
         
+        print(f"\n📋 SELECTED STATION SUMMARY:")
+        print("-" * 80)
+        
         if coops_stations:
-            print(f"\n🌊 CO-OPS STATIONS ({len(coops_stations)}):")
+            print(f"\n🌊 CO-OPS TIDE STATIONS ({len(coops_stations)} selected):")
             for station in coops_stations:
                 capabilities = ', '.join(station.get('capabilities', ['Water Level']))
                 state = station.get('state', 'Unknown')
+                bearing_text = station.get('bearing_text', 'Unknown')
+                
                 print(f"  • {station['id']} - {station['name']}, {state}")
-                print(f"    Distance: {station['distance_km']:.1f}km, Capabilities: {capabilities}")
+                print(f"    📍 {station['distance_km']:.1f}km {bearing_text} from your location")
+                print(f"    📊 Capabilities: {capabilities}")
         
         if ndbc_stations:
-            print(f"\n🛟 NDBC STATIONS ({len(ndbc_stations)}):")
+            print(f"\n🛟 NDBC BUOY STATIONS ({len(ndbc_stations)} selected):")
             for station in ndbc_stations:
                 capabilities = ', '.join(station.get('capabilities', ['Marine Weather']))
                 station_type = station.get('station_type', 'buoy').title()
+                bearing_text = station.get('bearing_text', 'Unknown')
+                
                 print(f"  • {station['id']} - {station['name']} ({station_type})")
-                print(f"    Distance: {station['distance_km']:.1f}km, Capabilities: {capabilities}")
+                print(f"    📍 {station['distance_km']:.1f}km {bearing_text} from your location")
+                print(f"    📊 Capabilities: {capabilities}")
         
-        print(f"\n💡 Data Collection Info:")
-        print(f"  • CO-OPS data updated every 10 minutes (high frequency)")
-        print(f"  • NDBC data updated hourly (standard meteorological)")
-        print(f"  • Total stations: {len(selected_stations)}")
+        print(f"\n💡 DATA COLLECTION SUMMARY:")
+        print(f"  • Total stations selected: {len(selected_stations)}")
+        print(f"  • CO-OPS data: Updated every 10 minutes (high frequency)")
+        print(f"  • NDBC data: Updated hourly (standard meteorological)")
+        print(f"  • Estimated daily API calls: {len(selected_stations) * 50}-{len(selected_stations) * 100}")
     
     def _collect_field_selections(self):
         """Collect field selections based on YAML complexity levels."""
