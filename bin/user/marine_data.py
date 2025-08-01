@@ -1,0 +1,2965 @@
+#!/usr/bin/env python3
+"""
+WeeWX Marine Data Extension - Core Service Framework
+
+Provides NOAA marine data integration with user-selectable stations and fields
+following proven OpenWeather extension architectural patterns.
+
+This extension integrates two NOAA data sources:
+- CO-OPS (Tides & Currents): Real-time water levels, tide predictions, coastal water temperature
+- NDBC (Buoy Data): Offshore marine weather, waves, and sea surface temperature
+
+Architecture follows WeeWX 5.1 StdService patterns with graceful degradation principles.
+
+Copyright (C) 2025 WeeWX Marine Data Extension
+"""
+
+import json
+import configobj
+import time
+import threading
+import urllib.request
+import urllib.parse
+import urllib.error
+import socket
+import os
+import argparse
+import sys
+import math
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any, Tuple
+
+import weewx
+from weewx.engine import StdService
+import weewx.units
+import weewx.manager
+import weeutil.logger
+
+log = weeutil.logger.logging.getLogger(__name__)
+
+VERSION = "1.0.0"
+
+class MarineDataAPIError(Exception):
+    """Custom exception for marine data API errors with specific error types."""
+    
+    def __init__(self, message, error_type=None, station_id=None, api_source=None):
+        """
+        Initialize marine data API error.
+        
+        Args:
+            message (str): Error description
+            error_type (str): Type of error ('rate_limit', 'auth', 'network', etc.)
+            station_id (str): Station ID that caused the error
+            api_source (str): API source ('coops' or 'ndbc')
+        """
+        super().__init__(message)
+        self.error_type = error_type
+        self.station_id = station_id
+        self.api_source = api_source
+
+
+class StationManager:
+    """
+    Manages marine station discovery, distance calculations, and station health monitoring.
+    
+    Handles both CO-OPS tide stations and NDBC buoy stations with automatic
+    distance-based filtering and station availability checking.
+    """
+    
+    def __init__(self, config_dict=None):
+        """
+        Initialize station manager with configuration.
+        
+        Args:
+            config_dict: WeeWX configuration dictionary for coordinate access
+        """
+        self.config_dict = config_dict
+        self.station_cache = {}
+        self.last_cache_update = 0
+        self.cache_duration = 3600  # Cache station data for 1 hour
+        
+        # Get user location from WeeWX configuration
+        self.user_latitude, self.user_longitude = self._get_user_location()
+        
+        log.info(f"StationManager initialized for location: {self.user_latitude}, {self.user_longitude}")
+    
+    def _get_user_location(self):
+        """
+        Extract user location from WeeWX configuration.
+        
+        Returns:
+            tuple: (latitude, longitude) as floats
+        """
+        if not self.config_dict:
+            log.warning("No config_dict available for station manager")
+            return 0.0, 0.0
+        
+        try:
+            station_config = self.config_dict.get('Station', {})
+            latitude = float(station_config.get('latitude', 0.0))
+            longitude = float(station_config.get('longitude', 0.0))
+            
+            if latitude == 0.0 and longitude == 0.0:
+                log.warning("Station coordinates not configured in WeeWX")
+            
+            return latitude, longitude
+            
+        except (ValueError, KeyError) as e:
+            log.error(f"Error reading station coordinates: {e}")
+            return 0.0, 0.0
+    
+    def discover_nearby_stations(self, max_distance_miles=100):
+        """
+        Discover CO-OPS and NDBC stations within specified distance.
+        
+        Args:
+            max_distance_miles (int): Maximum distance for station search
+            
+        Returns:
+            dict: Nearby stations organized by type
+                {
+                    'coops': [{'id': '9410230', 'name': 'La Jolla', 'distance': 15.2, ...}],
+                    'ndbc': [{'id': '46087', 'name': 'Coastal Buoy', 'distance': 32.1, ...}]
+                }
+        """
+        log.info(f"Discovering marine stations within {max_distance_miles} miles")
+        
+        try:
+            # Discover CO-OPS tide stations
+            coops_stations = self._discover_coops_stations(max_distance_miles)
+            
+            # Discover NDBC buoy stations
+            ndbc_stations = self._discover_ndbc_stations(max_distance_miles)
+            
+            nearby_stations = {
+                'coops': coops_stations,
+                'ndbc': ndbc_stations
+            }
+            
+            total_found = len(coops_stations) + len(ndbc_stations)
+            log.info(f"Station discovery complete: {len(coops_stations)} CO-OPS, {len(ndbc_stations)} NDBC ({total_found} total)")
+            
+            return nearby_stations
+            
+        except Exception as e:
+            log.error(f"Station discovery failed: {e}")
+            return {'coops': [], 'ndbc': []}
+    
+    def _discover_coops_stations(self, max_distance_miles):
+        """
+        Discover CO-OPS tide stations within distance range.
+        
+        Args:
+            max_distance_miles (int): Maximum search distance
+            
+        Returns:
+            list: CO-OPS stations with distance and capability information
+        """
+        try:
+            # Fetch CO-OPS station metadata
+            stations_url = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions"
+            
+            with urllib.request.urlopen(stations_url, timeout=30) as response:
+                if response.getcode() != 200:
+                    raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}", 
+                                           error_type='api_error', api_source='coops')
+                
+                data = json.loads(response.read().decode('utf-8'))
+                all_stations = data.get('stations', [])
+            
+            # Filter by distance and add capability information
+            nearby_stations = []
+            for station in all_stations:
+                try:
+                    station_lat = float(station.get('lat', 0))
+                    station_lon = float(station.get('lng', 0))
+                    
+                    # Calculate distance
+                    distance_miles, bearing = self._calculate_distance_and_bearing(
+                        self.user_latitude, self.user_longitude,
+                        station_lat, station_lon
+                    )
+                    
+                    if distance_miles <= max_distance_miles:
+                        station_info = {
+                            'id': station.get('id'),
+                            'name': station.get('name', 'Unknown'),
+                            'state': station.get('state', ''),
+                            'latitude': station_lat,
+                            'longitude': station_lon,
+                            'distance': distance_miles,
+                            'bearing': bearing,
+                            'products': self._get_coops_station_products(station),
+                            'type': 'coops'
+                        }
+                        nearby_stations.append(station_info)
+                        
+                except (ValueError, KeyError) as e:
+                    log.debug(f"Skipping invalid CO-OPS station: {e}")
+                    continue
+            
+            # Sort by distance
+            nearby_stations.sort(key=lambda x: x['distance'])
+            
+            log.info(f"Found {len(nearby_stations)} CO-OPS stations within {max_distance_miles} miles")
+            return nearby_stations[:10]  # Return top 10 closest
+            
+        except Exception as e:
+            log.error(f"CO-OPS station discovery failed: {e}")
+            return []
+    
+    def _discover_ndbc_stations(self, max_distance_miles):
+        """
+        Discover NDBC buoy stations within distance range.
+        
+        Args:
+            max_distance_miles (int): Maximum search distance
+            
+        Returns:
+            list: NDBC stations with distance and data type information
+        """
+        try:
+            # NDBC station list (simplified - in production would fetch from NDBC)
+            # This is a representative sample of major NDBC buoys
+            sample_ndbc_stations = [
+                {'id': '46087', 'name': 'California Coastal', 'lat': 33.617, 'lon': -119.052},
+                {'id': '46025', 'name': 'Santa Monica Bay', 'lat': 33.749, 'lon': -119.053},
+                {'id': '46026', 'name': 'San Francisco', 'lat': 37.759, 'lon': -122.833},
+                {'id': '46050', 'name': 'Stonewall Bank', 'lat': 44.056, 'lon': -124.526},
+                {'id': '46089', 'name': 'Tillamook', 'lat': 45.775, 'lon': -124.006},
+                {'id': '41002', 'name': 'South Hatteras', 'lat': 32.382, 'lon': -75.402},
+                {'id': '44013', 'name': 'Boston', 'lat': 42.346, 'lon': -70.651},
+                {'id': '44017', 'name': 'Montauk Point', 'lat': 40.694, 'lon': -72.048},
+                {'id': '45001', 'name': 'North Michigan', 'lat': 45.347, 'lon': -86.273},
+                {'id': '45007', 'name': 'Southeast Michigan', 'lat': 42.673, 'lon': -82.425}
+            ]
+            
+            nearby_stations = []
+            for station in sample_ndbc_stations:
+                try:
+                    # Calculate distance
+                    distance_miles, bearing = self._calculate_distance_and_bearing(
+                        self.user_latitude, self.user_longitude,
+                        station['lat'], station['lon']
+                    )
+                    
+                    if distance_miles <= max_distance_miles:
+                        station_info = {
+                            'id': station['id'],
+                            'name': station['name'],
+                            'latitude': station['lat'],
+                            'longitude': station['lon'],
+                            'distance': distance_miles,
+                            'bearing': bearing,
+                            'data_types': ['stdmet', 'ocean', 'spec'],  # Available data types
+                            'water_depth': 'Unknown',  # Would be fetched from NDBC metadata
+                            'type': 'ndbc'
+                        }
+                        nearby_stations.append(station_info)
+                        
+                except Exception as e:
+                    log.debug(f"Skipping invalid NDBC station: {e}")
+                    continue
+            
+            # Sort by distance
+            nearby_stations.sort(key=lambda x: x['distance'])
+            
+            log.info(f"Found {len(nearby_stations)} NDBC stations within {max_distance_miles} miles")
+            return nearby_stations[:10]  # Return top 10 closest
+            
+        except Exception as e:
+            log.error(f"NDBC station discovery failed: {e}")
+            return []
+    
+    def _get_coops_station_products(self, station_data):
+        """
+        Determine available data products for a CO-OPS station.
+        
+        Args:
+            station_data (dict): Station metadata from CO-OPS API
+            
+        Returns:
+            list: Available products ['water_level', 'predictions', 'water_temperature']
+        """
+        products = ['predictions']  # All tide stations have predictions
+        
+        # Check for real-time water level capability
+        if station_data.get('sensors'):
+            sensors = station_data['sensors']
+            if 'waterLevels' in sensors or 'wl' in sensors:
+                products.append('water_level')
+            if 'waterTemps' in sensors or 'wt' in sensors:
+                products.append('water_temperature')
+        
+        return products
+    
+    def _calculate_distance_and_bearing(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate great circle distance and bearing between two points using Haversine formula.
+        
+        Args:
+            lat1, lon1 (float): First point coordinates (degrees)
+            lat2, lon2 (float): Second point coordinates (degrees)
+            
+        Returns:
+            tuple: (distance_miles, bearing_degrees)
+        """
+        # Convert to radians
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
+        
+        # Haversine formula for distance
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
+        
+        a = (math.sin(dlat/2)**2 + 
+             math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2)
+        c = 2 * math.asin(math.sqrt(a))
+        
+        # Earth's radius in miles
+        earth_radius_miles = 3959.0
+        distance_miles = earth_radius_miles * c
+        
+        # Calculate bearing
+        y = math.sin(dlon) * math.cos(lat2_rad)
+        x = (math.cos(lat1_rad) * math.sin(lat2_rad) - 
+             math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon))
+        bearing_rad = math.atan2(y, x)
+        bearing_degrees = (math.degrees(bearing_rad) + 360) % 360
+        
+        return round(distance_miles, 1), round(bearing_degrees, 0)
+    
+    def validate_station_configuration(self, selected_stations):
+        """
+        Validate that selected stations are reachable and operational.
+        
+        Args:
+            selected_stations (dict): User-selected stations by type
+            
+        Returns:
+            dict: Validation results with status and recommendations
+        """
+        validation_results = {
+            'valid_stations': [],
+            'invalid_stations': [],
+            'warnings': [],
+            'recommendations': []
+        }
+        
+        log.info("Validating station configuration...")
+        
+        # Validate CO-OPS stations
+        for station_id in selected_stations.get('coops_stations', []):
+            try:
+                if self._test_coops_station_connectivity(station_id):
+                    validation_results['valid_stations'].append({
+                        'id': station_id,
+                        'type': 'coops',
+                        'status': 'operational'
+                    })
+                else:
+                    validation_results['invalid_stations'].append({
+                        'id': station_id,
+                        'type': 'coops',
+                        'status': 'unreachable'
+                    })
+            except Exception as e:
+                log.error(f"Error validating CO-OPS station {station_id}: {e}")
+                validation_results['invalid_stations'].append({
+                    'id': station_id,
+                    'type': 'coops',
+                    'status': 'error',
+                    'error': str(e)
+                })
+        
+        # Validate NDBC stations
+        for station_id in selected_stations.get('ndbc_stations', []):
+            try:
+                if self._test_ndbc_station_connectivity(station_id):
+                    validation_results['valid_stations'].append({
+                        'id': station_id,
+                        'type': 'ndbc',
+                        'status': 'operational'
+                    })
+                else:
+                    validation_results['invalid_stations'].append({
+                        'id': station_id,
+                        'type': 'ndbc',
+                        'status': 'unreachable'
+                    })
+            except Exception as e:
+                log.error(f"Error validating NDBC station {station_id}: {e}")
+                validation_results['invalid_stations'].append({
+                    'id': station_id,
+                    'type': 'ndbc',
+                    'status': 'error',
+                    'error': str(e)
+                })
+        
+        # Generate recommendations
+        total_stations = len(validation_results['valid_stations'])
+        if total_stations < 2:
+            validation_results['recommendations'].append(
+                "Consider selecting multiple stations for backup data sources"
+            )
+        
+        if validation_results['invalid_stations']:
+            validation_results['warnings'].append(
+                f"{len(validation_results['invalid_stations'])} stations are not operational"
+            )
+        
+        log.info(f"Station validation complete: {total_stations} operational stations")
+        return validation_results
+    
+    def _test_coops_station_connectivity(self, station_id):
+        """
+        Test connectivity to a specific CO-OPS station.
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+            
+        Returns:
+            bool: True if station is reachable and has recent data
+        """
+        try:
+            # Test with a simple water level request for last hour
+            url = (f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+                   f"?product=water_level&station={station_id}&date=latest"
+                   f"&format=json&units=english&time_zone=gmt")
+            
+            with urllib.request.urlopen(url, timeout=10) as response:
+                if response.getcode() == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    # Check if we got actual data (not just an empty response)
+                    return 'data' in data and len(data.get('data', [])) > 0
+                else:
+                    return False
+                    
+        except Exception as e:
+            log.debug(f"CO-OPS station {station_id} connectivity test failed: {e}")
+            return False
+    
+    def _test_ndbc_station_connectivity(self, station_id):
+        """
+        Test connectivity to a specific NDBC station.
+        
+        Args:
+            station_id (str): NDBC station identifier
+            
+        Returns:
+            bool: True if station data file is accessible and has recent data
+        """
+        try:
+            # Test access to standard meteorological data file
+            url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
+            
+            with urllib.request.urlopen(url, timeout=10) as response:
+                if response.getcode() == 200:
+                    content = response.read().decode('utf-8')
+                    lines = content.strip().split('\n')
+                    # Should have header + units + at least one data line
+                    return len(lines) >= 3
+                else:
+                    return False
+                    
+        except Exception as e:
+            log.debug(f"NDBC station {station_id} connectivity test failed: {e}")
+            return False
+
+
+class COOPSAPIClient:
+    """
+    API client for NOAA CO-OPS (Center for Operational Oceanographic Products and Services).
+    
+    Handles water level observations, tide predictions, and water temperature data
+    with proper error handling and rate limiting.
+    """
+    
+    def __init__(self, timeout=30, config_dict=None):
+        """
+        Initialize CO-OPS API client.
+        
+        Args:
+            timeout (int): Request timeout in seconds
+            config_dict: WeeWX configuration dictionary for settings
+        """
+        self.timeout = timeout
+        self.config_dict = config_dict
+        
+        self.base_url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+        
+        # Rate limiting state
+        self.last_request_time = 0
+        self.min_request_interval = 5  # Minimum 5 seconds between requests
+        
+        log.info("CO-OPS API client initialized")
+    
+    def collect_water_level(self, station_id, hours_back=1):
+        """
+        Collect current water level observations from CO-OPS station.
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+            hours_back (int): Hours of data to retrieve
+            
+        Returns:
+            dict: Processed water level data or None if failed
+                {
+                    'station_id': '9410230',
+                    'water_level': 2.45,
+                    'sigma': 0.02,
+                    'flags': 'verified',
+                    'timestamp': '2025-01-31T20:42:00Z'
+                }
+        """
+        try:
+            self._enforce_rate_limit()
+            
+            # Build CO-OPS water level API request
+            params = {
+                'product': 'water_level',
+                'station': station_id,
+                'date': 'latest',
+                'format': 'json',
+                'units': 'english',
+                'time_zone': 'gmt'
+            }
+            
+            url = f"{self.base_url}?" + urllib.parse.urlencode(params)
+            
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
+                                           error_type='api_error', station_id=station_id, api_source='coops')
+                
+                data = json.loads(response.read().decode('utf-8'))
+                return self._process_water_level_data(data, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise MarineDataAPIError(f"CO-OPS station {station_id} not found",
+                                       error_type='station_not_found', station_id=station_id, api_source='coops')
+            elif e.code == 429:
+                raise MarineDataAPIError("CO-OPS rate limit exceeded",
+                                       error_type='rate_limit', station_id=station_id, api_source='coops')
+            else:
+                raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='coops')
+        except urllib.error.URLError as e:
+            raise MarineDataAPIError(f"CO-OPS network error: {e.reason}",
+                                   error_type='network_error', station_id=station_id, api_source='coops')
+        except socket.timeout:
+            raise MarineDataAPIError("CO-OPS request timeout",
+                                   error_type='timeout', station_id=station_id, api_source='coops')
+        except json.JSONDecodeError as e:
+            raise MarineDataAPIError(f"CO-OPS invalid JSON response: {e}",
+                                   error_type='invalid_response', station_id=station_id, api_source='coops')
+    
+    def collect_tide_predictions(self, station_id, hours_ahead=48):
+        """
+        Collect tide predictions from CO-OPS station.
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+            hours_ahead (int): Hours of predictions to retrieve
+            
+        Returns:
+            dict: Processed tide prediction data or None if failed
+                {
+                    'station_id': '9410230',
+                    'next_high_time': '2025-02-01T02:15:00Z',
+                    'next_high_height': 6.23,
+                    'next_low_time': '2025-02-01T08:42:00Z',
+                    'next_low_height': -0.45,
+                    'tidal_range': 6.68
+                }
+        """
+        try:
+            self._enforce_rate_limit()
+            
+            # Calculate prediction time range
+            now = datetime.now(timezone.utc)
+            end_time = now.replace(hour=now.hour + hours_ahead, minute=0, second=0, microsecond=0)
+            
+            params = {
+                'product': 'predictions',
+                'station': station_id,
+                'begin_date': now.strftime('%Y%m%d %H:%M'),
+                'end_date': end_time.strftime('%Y%m%d %H:%M'),
+                'format': 'json',
+                'units': 'english',
+                'time_zone': 'gmt',
+                'interval': 'hilo'  # High/low tides only
+            }
+            
+            url = f"{self.base_url}?" + urllib.parse.urlencode(params)
+            
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
+                                           error_type='api_error', station_id=station_id, api_source='coops')
+                
+                data = json.loads(response.read().decode('utf-8'))
+                return self._process_tide_predictions(data, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise MarineDataAPIError(f"CO-OPS station {station_id} predictions not available",
+                                       error_type='station_not_found', station_id=station_id, api_source='coops')
+            else:
+                raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='coops')
+        except Exception as e:
+            raise MarineDataAPIError(f"CO-OPS tide prediction error: {e}",
+                                   error_type='api_error', station_id=station_id, api_source='coops')
+    
+    def collect_water_temperature(self, station_id, hours_back=1):
+        """
+        Collect water temperature data from CO-OPS station (when available).
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+            hours_back (int): Hours of data to retrieve
+            
+        Returns:
+            dict: Processed water temperature data or None if failed/unavailable
+                {
+                    'station_id': '9410230',
+                    'water_temperature': 18.5,
+                    'flags': 'verified',
+                    'timestamp': '2025-01-31T20:42:00Z'
+                }
+        """
+        try:
+            self._enforce_rate_limit()
+            
+            params = {
+                'product': 'water_temperature',
+                'station': station_id,
+                'date': 'latest',
+                'format': 'json',
+                'units': 'english',
+                'time_zone': 'gmt'
+            }
+            
+            url = f"{self.base_url}?" + urllib.parse.urlencode(params)
+            
+            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    return None  # Water temperature not available at this station
+                
+                data = json.loads(response.read().decode('utf-8'))
+                return self._process_water_temperature_data(data, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                log.debug(f"Water temperature not available at CO-OPS station {station_id}")
+                return None  # Not an error - just not available
+            else:
+                raise MarineDataAPIError(f"CO-OPS water temperature error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='coops')
+        except Exception as e:
+            log.debug(f"CO-OPS water temperature collection failed for {station_id}: {e}")
+            return None  # Non-critical failure
+    
+    def _process_water_level_data(self, api_response, station_id):
+        """
+        Process CO-OPS water level API response into standardized format.
+        
+        Args:
+            api_response (dict): Raw API response
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed water level data
+        """
+        if not api_response or 'data' not in api_response:
+            return None
+        
+        data_points = api_response['data']
+        if not data_points:
+            return None
+        
+        # Get most recent data point
+        latest = data_points[0]
+        
+        try:
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'water_level',
+                'timestamp': latest.get('t'),
+                'water_level': float(latest.get('v', 0)),
+                'sigma': float(latest.get('s', 0)) if latest.get('s') else None,
+                'flags': latest.get('f', ''),
+                'quality': latest.get('q', '')
+            }
+            
+            log.debug(f"Processed water level data for station {station_id}: {processed_data['water_level']} ft")
+            return processed_data
+            
+        except (ValueError, KeyError) as e:
+            log.error(f"Error processing water level data for {station_id}: {e}")
+            return None
+    
+    def _process_tide_predictions(self, api_response, station_id):
+        """
+        Process CO-OPS tide prediction API response into next high/low format.
+        
+        Args:
+            api_response (dict): Raw API response
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed tide prediction data
+        """
+        if not api_response or 'predictions' not in api_response:
+            return None
+        
+        predictions = api_response['predictions']
+        if not predictions:
+            return None
+        
+        try:
+            current_time = datetime.now(timezone.utc)
+            next_high = None
+            next_low = None
+            
+            # Find next high and low tides
+            for prediction in predictions:
+                pred_time_str = prediction.get('t')
+                pred_type = prediction.get('type')
+                pred_height = float(prediction.get('v', 0))
+                
+                if not pred_time_str or not pred_type:
+                    continue
+                
+                # Parse prediction time
+                try:
+                    pred_time = datetime.fromisoformat(pred_time_str.replace(' ', 'T') + '+00:00')
+                except ValueError:
+                    continue
+                
+                # Only consider future predictions
+                if pred_time <= current_time:
+                    continue
+                
+                # Find next high tide
+                if pred_type == 'H' and not next_high:
+                    next_high = {
+                        'time': pred_time_str,
+                        'height': pred_height
+                    }
+                
+                # Find next low tide
+                if pred_type == 'L' and not next_low:
+                    next_low = {
+                        'time': pred_time_str,
+                        'height': pred_height
+                    }
+                
+                # Stop when we have both
+                if next_high and next_low:
+                    break
+            
+            # Calculate tidal range if we have both high and low
+            tidal_range = None
+            if next_high and next_low:
+                tidal_range = abs(next_high['height'] - next_low['height'])
+            
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'tide_predictions',
+                'next_high_time': next_high['time'] if next_high else None,
+                'next_high_height': next_high['height'] if next_high else None,
+                'next_low_time': next_low['time'] if next_low else None,
+                'next_low_height': next_low['height'] if next_low else None,
+                'tidal_range': tidal_range
+            }
+            
+            log.debug(f"Processed tide predictions for station {station_id}")
+            return processed_data
+            
+        except (ValueError, KeyError) as e:
+            log.error(f"Error processing tide predictions for {station_id}: {e}")
+            return None
+    
+    def _process_water_temperature_data(self, api_response, station_id):
+        """
+        Process CO-OPS water temperature API response into standardized format.
+        
+        Args:
+            api_response (dict): Raw API response
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed water temperature data
+        """
+        if not api_response or 'data' not in api_response:
+            return None
+        
+        data_points = api_response['data']
+        if not data_points:
+            return None
+        
+        # Get most recent data point
+        latest = data_points[0]
+        
+        try:
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'water_temperature',
+                'timestamp': latest.get('t'),
+                'water_temperature': float(latest.get('v', 0)),
+                'flags': latest.get('f', '')
+            }
+            
+            log.debug(f"Processed water temperature data for station {station_id}: {processed_data['water_temperature']}°F")
+            return processed_data
+            
+        except (ValueError, KeyError) as e:
+            log.error(f"Error processing water temperature data for {station_id}: {e}")
+            return None
+    
+    def _enforce_rate_limit(self):
+        """
+        Enforce minimum time between API requests to respect CO-OPS rate limits.
+        """
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last
+            log.debug(f"Rate limiting: sleeping {sleep_time:.1f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+
+
+class NDBCAPIClient:
+    """
+    API client for NOAA NDBC (National Data Buoy Center) data files.
+    
+    Handles parsing of standard meteorological, ocean, and spectral wave data
+    from NDBC real-time data files with data validation and quality control.
+    """
+    
+    def __init__(self, timeout=30, config_dict=None):
+        """
+        Initialize NDBC API client.
+        
+        Args:
+            timeout (int): Request timeout in seconds
+            config_dict: WeeWX configuration dictionary for settings
+        """
+        self.timeout = timeout
+        self.config_dict = config_dict
+        
+        self.base_url = "https://www.ndbc.noaa.gov/data/realtime2"
+        
+        # NDBC data file types
+        self.file_types = {
+            'stdmet': '.txt',      # Standard meteorological data
+            'ocean': '.ocean',     # Ocean temperature and salinity
+            'spec': '.spec'        # Spectral wave data
+        }
+        
+        log.info("NDBC API client initialized")
+    
+    def collect_standard_met(self, station_id):
+        """
+        Collect standard meteorological data from NDBC buoy.
+        
+        Args:
+            station_id (str): NDBC station identifier (e.g., '46087')
+            
+        Returns:
+            dict: Processed meteorological data or None if failed
+                {
+                    'station_id': '46087',
+                    'wave_height': 2.1,
+                    'wave_period': 8.2,
+                    'wave_direction': 270,
+                    'wind_speed': 12.5,
+                    'wind_direction': 225,
+                    'air_temperature': 18.3,
+                    'sea_surface_temp': 16.8,
+                    'barometric_pressure': 1013.2
+                }
+        """
+        try:
+            file_url = f"{self.base_url}/{station_id}.txt"
+            
+            with urllib.request.urlopen(file_url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    raise MarineDataAPIError(f"NDBC returned status {response.getcode()}",
+                                           error_type='api_error', station_id=station_id, api_source='ndbc')
+                
+                content = response.read().decode('utf-8')
+                return self._process_stdmet_data(content, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise MarineDataAPIError(f"NDBC station {station_id} data not available",
+                                       error_type='station_not_found', station_id=station_id, api_source='ndbc')
+            else:
+                raise MarineDataAPIError(f"NDBC HTTP error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='ndbc')
+        except urllib.error.URLError as e:
+            raise MarineDataAPIError(f"NDBC network error: {e.reason}",
+                                   error_type='network_error', station_id=station_id, api_source='ndbc')
+        except socket.timeout:
+            raise MarineDataAPIError("NDBC request timeout",
+                                   error_type='timeout', station_id=station_id, api_source='ndbc')
+    
+    def collect_ocean_data(self, station_id):
+        """
+        Collect ocean temperature and salinity data from NDBC buoy.
+        
+        Args:
+            station_id (str): NDBC station identifier
+            
+        Returns:
+            dict: Processed ocean data or None if failed/unavailable
+        """
+        try:
+            file_url = f"{self.base_url}/{station_id}.ocean"
+            
+            with urllib.request.urlopen(file_url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    return None  # Ocean data not available for this buoy
+                
+                content = response.read().decode('utf-8')
+                return self._process_ocean_data(content, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                log.debug(f"Ocean data not available for NDBC station {station_id}")
+                return None  # Not an error - just not available
+            else:
+                raise MarineDataAPIError(f"NDBC ocean data error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='ndbc')
+        except Exception as e:
+            log.debug(f"NDBC ocean data collection failed for {station_id}: {e}")
+            return None  # Non-critical failure
+    
+    def collect_wave_spectra(self, station_id):
+        """
+        Collect spectral wave data from NDBC buoy.
+        
+        Args:
+            station_id (str): NDBC station identifier
+            
+        Returns:
+            dict: Processed spectral wave data or None if failed/unavailable
+        """
+        try:
+            file_url = f"{self.base_url}/{station_id}.spec"
+            
+            with urllib.request.urlopen(file_url, timeout=self.timeout) as response:
+                if response.getcode() != 200:
+                    return None  # Spectral data not available for this buoy
+                
+                content = response.read().decode('utf-8')
+                return self._process_spectral_data(content, station_id)
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                log.debug(f"Spectral wave data not available for NDBC station {station_id}")
+                return None  # Not an error - just not available
+            else:
+                raise MarineDataAPIError(f"NDBC spectral data error {e.code}: {e.reason}",
+                                       error_type='api_error', station_id=station_id, api_source='ndbc')
+        except Exception as e:
+            log.debug(f"NDBC spectral data collection failed for {station_id}: {e}")
+            return None  # Non-critical failure
+    
+    def _process_stdmet_data(self, file_content, station_id):
+        """
+        Process NDBC standard meteorological data file.
+        
+        Args:
+            file_content (str): Raw file content
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed meteorological data
+        """
+        lines = file_content.strip().split('\n')
+        
+        if len(lines) < 3:
+            raise MarineDataAPIError(f"NDBC file for {station_id} has insufficient data",
+                                   error_type='invalid_data', station_id=station_id, api_source='ndbc')
+        
+        try:
+            # Parse header and units lines
+            headers = lines[0].split()
+            units = lines[1].split()
+            
+            # Get most recent data line (line 2, index 2)
+            latest_data = lines[2].split()
+            
+            if len(latest_data) != len(headers):
+                raise MarineDataAPIError(f"NDBC data format mismatch for {station_id}",
+                                       error_type='invalid_data', station_id=station_id, api_source='ndbc')
+            
+            # Create data mapping
+            data_dict = dict(zip(headers, latest_data))
+            
+            # Extract and validate standard fields
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'stdmet'
+            }
+            
+            # Map NDBC fields to our standardized field names with validation
+            field_mappings = {
+                'WVHT': ('wave_height', 'meters'),
+                'DPD': ('wave_period', 'seconds'),
+                'APD': ('avg_wave_period', 'seconds'),
+                'MWD': ('wave_direction', 'degrees'),
+                'WSPD': ('wind_speed', 'm/s'),
+                'WDIR': ('wind_direction', 'degrees'),
+                'GST': ('wind_gust', 'm/s'),
+                'ATMP': ('air_temperature', 'celsius'),
+                'WTMP': ('sea_surface_temp', 'celsius'),
+                'PRES': ('barometric_pressure', 'hPa'),
+                'VIS': ('visibility', 'nautical_miles'),
+                'DEWP': ('dewpoint', 'celsius'),
+                'TIDE': ('tide_level', 'feet')
+            }
+            
+            for ndbc_field, (our_field, units) in field_mappings.items():
+                if ndbc_field in data_dict:
+                    raw_value = data_dict[ndbc_field]
+                    
+                    # NDBC uses 'MM' for missing data
+                    if raw_value != 'MM':
+                        try:
+                            numeric_value = float(raw_value)
+                            
+                            # Apply data validation
+                            if self._validate_ndbc_value(our_field, numeric_value):
+                                processed_data[our_field] = numeric_value
+                            else:
+                                log.warning(f"Invalid {our_field} value for {station_id}: {numeric_value}")
+                                processed_data[our_field] = None
+                        except ValueError:
+                            processed_data[our_field] = None
+                    else:
+                        processed_data[our_field] = None
+            
+            # Add timestamp from NDBC data
+            try:
+                year = int(data_dict.get('#YY', 0))
+                month = int(data_dict.get('MM', 0))
+                day = int(data_dict.get('DD', 0))
+                hour = int(data_dict.get('hh', 0))
+                minute = int(data_dict.get('mm', 0))
+                
+                # Handle 2-digit year (NDBC format)
+                if year < 50:
+                    year += 2000
+                elif year < 100:
+                    year += 1900
+                
+                timestamp = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+                processed_data['timestamp'] = timestamp.isoformat()
+                
+            except (ValueError, KeyError):
+                processed_data['timestamp'] = None
+            
+            log.debug(f"Processed NDBC standard met data for station {station_id}")
+            return processed_data
+            
+        except Exception as e:
+            log.error(f"Error processing NDBC standard met data for {station_id}: {e}")
+            raise MarineDataAPIError(f"NDBC data processing failed: {e}",
+                                   error_type='processing_error', station_id=station_id, api_source='ndbc')
+    
+    def _process_ocean_data(self, file_content, station_id):
+        """
+        Process NDBC ocean data file (temperature at depth, salinity, etc.).
+        
+        Args:
+            file_content (str): Raw file content
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed ocean data
+        """
+        lines = file_content.strip().split('\n')
+        
+        if len(lines) < 3:
+            return None
+        
+        try:
+            headers = lines[0].split()
+            latest_data = lines[2].split()
+            
+            data_dict = dict(zip(headers, latest_data))
+            
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'ocean'
+            }
+            
+            # Extract ocean-specific fields
+            ocean_mappings = {
+                'OTMP': 'ocean_temp_surface',
+                'OTMP1': 'ocean_temp_1m',
+                'OTMP2': 'ocean_temp_2m',
+                'COND': 'conductivity',
+                'SAL': 'salinity'
+            }
+            
+            for ndbc_field, our_field in ocean_mappings.items():
+                if ndbc_field in data_dict and data_dict[ndbc_field] != 'MM':
+                    try:
+                        processed_data[our_field] = float(data_dict[ndbc_field])
+                    except ValueError:
+                        processed_data[our_field] = None
+            
+            return processed_data if any(v is not None for k, v in processed_data.items() if k != 'station_id' and k != 'data_type') else None
+            
+        except Exception as e:
+            log.error(f"Error processing NDBC ocean data for {station_id}: {e}")
+            return None
+    
+    def _process_spectral_data(self, file_content, station_id):
+        """
+        Process NDBC spectral wave data file.
+        
+        Args:
+            file_content (str): Raw file content
+            station_id (str): Station identifier
+            
+        Returns:
+            dict: Processed spectral wave data
+        """
+        # Spectral data processing is complex - simplified for now
+        lines = file_content.strip().split('\n')
+        
+        if len(lines) < 3:
+            return None
+        
+        try:
+            # Basic spectral data extraction
+            processed_data = {
+                'station_id': station_id,
+                'data_type': 'spectral_waves',
+                'spectral_data_available': True
+            }
+            
+            # In full implementation, would parse frequency bands and energy density
+            # For now, just confirm spectral data is available
+            
+            return processed_data
+            
+        except Exception as e:
+            log.error(f"Error processing NDBC spectral data for {station_id}: {e}")
+            return None
+    
+    def _validate_ndbc_value(self, field_name, value):
+        """
+        Validate NDBC data values for reasonable ranges.
+        
+        Args:
+            field_name (str): Name of the data field
+            value (float): Value to validate
+            
+        Returns:
+            bool: True if value is within reasonable range
+        """
+        validation_ranges = {
+            'wave_height': (0, 30),              # 0-30 meters
+            'wave_period': (1, 30),              # 1-30 seconds
+            'wave_direction': (0, 360),          # 0-360 degrees
+            'wind_speed': (0, 100),              # 0-100 m/s
+            'wind_direction': (0, 360),          # 0-360 degrees
+            'wind_gust': (0, 150),               # 0-150 m/s
+            'air_temperature': (-40, 60),        # -40 to 60°C
+            'sea_surface_temp': (-5, 40),        # -5 to 40°C
+            'barometric_pressure': (900, 1100),  # 900-1100 hPa
+            'visibility': (0, 50),               # 0-50 nautical miles
+            'dewpoint': (-50, 50)                # -50 to 50°C
+        }
+        
+        if field_name in validation_ranges:
+            min_val, max_val = validation_ranges[field_name]
+            return min_val <= value <= max_val
+        
+        return True  # No validation range defined - accept value
+
+
+class MarineDatabaseManager:
+    """
+    Manages marine data database operations including two-table architecture.
+    
+    Handles creation and management of both high-frequency CO-OPS data table
+    and lower-frequency marine forecast data table with proper field types.
+    """
+    
+    def __init__(self, config_dict):
+        """
+        Initialize marine database manager.
+        
+        Args:
+            config_dict: WeeWX configuration dictionary for database access
+        """
+        self.config_dict = config_dict
+        self.db_binding = 'wx_binding'  # Standard WeeWX database binding
+        
+        log.info("Marine database manager initialized")
+    
+    def create_marine_tables(self, selected_fields, selected_stations):
+        """
+        Create marine data tables based on selected fields and stations.
+        
+        Args:
+            selected_fields (dict): Selected fields by module
+            selected_stations (dict): Selected stations by type
+            
+        Returns:
+            int: Number of tables created
+        """
+        try:
+            tables_created = 0
+            
+            # Create high-frequency CO-OPS data table if CO-OPS stations selected
+            if selected_stations.get('coops_stations'):
+                if self._create_coops_data_table():
+                    tables_created += 1
+            
+            # Create marine forecast data table if any marine data selected
+            if selected_fields:
+                if self._create_marine_forecast_table():
+                    tables_created += 1
+            
+            log.info(f"Marine database setup complete: {tables_created} tables ready")
+            return tables_created
+            
+        except Exception as e:
+            log.error(f"Marine database table creation failed: {e}")
+            raise Exception(f"Database setup failed: {e}")
+    
+    def _create_coops_data_table(self):
+        """
+        Create high-frequency CO-OPS data table for 6-minute water level updates.
+        
+        Returns:
+            bool: True if table was created or already exists
+        """
+        try:
+            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
+                # Check if table already exists
+                try:
+                    dbmanager.connection.execute("SELECT 1 FROM coops_data LIMIT 1")
+                    log.info("CO-OPS data table already exists")
+                    return True
+                except:
+                    pass  # Table doesn't exist, create it
+                
+                # Determine database type for appropriate SQL
+                db_type = 'sqlite' if 'sqlite' in str(dbmanager.connection).lower() else 'mysql'
+                
+                if db_type == 'sqlite':
+                    create_sql = """
+                    CREATE TABLE coops_data (
+                        dateTime INTEGER NOT NULL,
+                        station_id TEXT NOT NULL,
+                        marine_current_water_level REAL,
+                        marine_water_level_sigma REAL,
+                        marine_water_level_flags TEXT,
+                        marine_coastal_water_temp REAL,
+                        marine_water_temp_flags TEXT,
+                        PRIMARY KEY (dateTime, station_id)
+                    )"""
+                else:
+                    create_sql = """
+                    CREATE TABLE coops_data (
+                        dateTime INTEGER NOT NULL,
+                        station_id VARCHAR(20) NOT NULL,
+                        marine_current_water_level REAL,
+                        marine_water_level_sigma REAL,
+                        marine_water_level_flags VARCHAR(50),
+                        marine_coastal_water_temp REAL,
+                        marine_water_temp_flags VARCHAR(50),
+                        PRIMARY KEY (dateTime, station_id)
+                    )"""
+                
+                dbmanager.connection.execute(create_sql)
+                log.info("Created CO-OPS data table for high-frequency water level data")
+                return True
+                
+        except Exception as e:
+            log.error(f"Failed to create CO-OPS data table: {e}")
+            raise Exception(f"CO-OPS table creation failed: {e}")
+    
+    def _create_marine_forecast_table(self):
+        """
+        Create marine forecast data table for lower-frequency tide predictions and buoy data.
+        
+        Returns:
+            bool: True if table was created or already exists
+        """
+        try:
+            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
+                # Check if table already exists
+                try:
+                    dbmanager.connection.execute("SELECT 1 FROM marine_forecast_data LIMIT 1")
+                    log.info("Marine forecast data table already exists")
+                    return True
+                except:
+                    pass  # Table doesn't exist, create it
+                
+                # Determine database type for appropriate SQL
+                db_type = 'sqlite' if 'sqlite' in str(dbmanager.connection).lower() else 'mysql'
+                
+                if db_type == 'sqlite':
+                    create_sql = """
+                    CREATE TABLE marine_forecast_data (
+                        dateTime INTEGER NOT NULL,
+                        station_id TEXT NOT NULL,
+                        station_type TEXT NOT NULL,
+                        data_type TEXT NOT NULL,
+                        -- Tide Prediction Fields
+                        marine_next_high_time TEXT,
+                        marine_next_high_height REAL,
+                        marine_next_low_time TEXT,
+                        marine_next_low_height REAL,
+                        marine_tide_range REAL,
+                        -- NDBC Buoy Weather Fields
+                        marine_wave_height REAL,
+                        marine_wave_period REAL,
+                        marine_avg_wave_period REAL,
+                        marine_wave_direction REAL,
+                        marine_wind_speed REAL,
+                        marine_wind_direction REAL,
+                        marine_wind_gust REAL,
+                        marine_air_temp REAL,
+                        marine_sea_surface_temp REAL,
+                        marine_barometric_pressure REAL,
+                        marine_visibility REAL,
+                        marine_dewpoint REAL,
+                        PRIMARY KEY (dateTime, station_id, data_type)
+                    )"""
+                else:
+                    create_sql = """
+                    CREATE TABLE marine_forecast_data (
+                        dateTime INTEGER NOT NULL,
+                        station_id VARCHAR(20) NOT NULL,
+                        station_type VARCHAR(20) NOT NULL,
+                        data_type VARCHAR(30) NOT NULL,
+                        -- Tide Prediction Fields
+                        marine_next_high_time VARCHAR(30),
+                        marine_next_high_height REAL,
+                        marine_next_low_time VARCHAR(30),
+                        marine_next_low_height REAL,
+                        marine_tide_range REAL,
+                        -- NDBC Buoy Weather Fields
+                        marine_wave_height REAL,
+                        marine_wave_period REAL,
+                        marine_avg_wave_period REAL,
+                        marine_wave_direction REAL,
+                        marine_wind_speed REAL,
+                        marine_wind_direction REAL,
+                        marine_wind_gust REAL,
+                        marine_air_temp REAL,
+                        marine_sea_surface_temp REAL,
+                        marine_barometric_pressure REAL,
+                        marine_visibility REAL,
+                        marine_dewpoint REAL,
+                        PRIMARY KEY (dateTime, station_id, data_type)
+                    )"""
+                
+                dbmanager.connection.execute(create_sql)
+                log.info("Created marine forecast data table for tide predictions and buoy data")
+                return True
+                
+        except Exception as e:
+            log.error(f"Failed to create marine forecast data table: {e}")
+            raise Exception(f"Marine forecast table creation failed: {e}")
+    
+    def insert_coops_data(self, data_records):
+        """
+        Insert CO-OPS data records into high-frequency table.
+        
+        Args:
+            data_records (list): List of CO-OPS data dictionaries
+            
+        Returns:
+            int: Number of records inserted
+        """
+        if not data_records:
+            return 0
+        
+        try:
+            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
+                inserted = 0
+                
+                for record in data_records:
+                    try:
+                        # Build insert statement
+                        sql = """
+                        INSERT OR REPLACE INTO coops_data 
+                        (dateTime, station_id, marine_current_water_level, marine_water_level_sigma,
+                         marine_water_level_flags, marine_coastal_water_temp, marine_water_temp_flags)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """
+                        
+                        values = (
+                            int(time.time()),  # Current timestamp
+                            record.get('station_id'),
+                            record.get('water_level'),
+                            record.get('sigma'),
+                            record.get('flags', ''),
+                            record.get('water_temperature'),
+                            record.get('water_temp_flags', '')
+                        )
+                        
+                        dbmanager.connection.execute(sql, values)
+                        inserted += 1
+                        
+                    except Exception as e:
+                        log.error(f"Failed to insert CO-OPS record: {e}")
+                        continue
+                
+                log.debug(f"Inserted {inserted} CO-OPS data records")
+                return inserted
+                
+        except Exception as e:
+            log.error(f"CO-OPS data insertion failed: {e}")
+            return 0
+    
+    def insert_marine_forecast_data(self, data_records):
+        """
+        Insert marine forecast data records (tide predictions, buoy data).
+        
+        Args:
+            data_records (list): List of marine forecast data dictionaries
+            
+        Returns:
+            int: Number of records inserted
+        """
+        if not data_records:
+            return 0
+        
+        try:
+            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
+                inserted = 0
+                
+                for record in data_records:
+                    try:
+                        # Build insert statement with all marine forecast fields
+                        sql = """
+                        INSERT OR REPLACE INTO marine_forecast_data 
+                        (dateTime, station_id, station_type, data_type,
+                         marine_next_high_time, marine_next_high_height,
+                         marine_next_low_time, marine_next_low_height, marine_tide_range,
+                         marine_wave_height, marine_wave_period, marine_avg_wave_period,
+                         marine_wave_direction, marine_wind_speed, marine_wind_direction,
+                         marine_wind_gust, marine_air_temp, marine_sea_surface_temp,
+                         marine_barometric_pressure, marine_visibility, marine_dewpoint)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """
+                        
+                        values = (
+                            int(time.time()),
+                            record.get('station_id'),
+                            record.get('station_type', 'unknown'),
+                            record.get('data_type', 'unknown'),
+                            record.get('next_high_time'),
+                            record.get('next_high_height'),
+                            record.get('next_low_time'),
+                            record.get('next_low_height'),
+                            record.get('tidal_range'),
+                            record.get('wave_height'),
+                            record.get('wave_period'),
+                            record.get('avg_wave_period'),
+                            record.get('wave_direction'),
+                            record.get('wind_speed'),
+                            record.get('wind_direction'),
+                            record.get('wind_gust'),
+                            record.get('air_temperature'),
+                            record.get('sea_surface_temp'),
+                            record.get('barometric_pressure'),
+                            record.get('visibility'),
+                            record.get('dewpoint')
+                        )
+                        
+                        dbmanager.connection.execute(sql, values)
+                        inserted += 1
+                        
+                    except Exception as e:
+                        log.error(f"Failed to insert marine forecast record: {e}")
+                        continue
+                
+                log.debug(f"Inserted {inserted} marine forecast data records")
+                return inserted
+                
+        except Exception as e:
+            log.error(f"Marine forecast data insertion failed: {e}")
+            return 0
+
+
+class MarineFieldManager:
+    """
+    Manages marine data field selection and database mapping using configuration data.
+    
+    Handles field selection validation, database field mapping, and unit group assignment
+    following OpenWeather extension patterns but adapted for marine data sources.
+    """
+    
+    def __init__(self, config_dict=None):
+        """
+        Initialize marine field manager with configuration.
+        
+        Args:
+            config_dict: WeeWX configuration dictionary for field mappings
+        """
+        self.config_dict = config_dict
+        
+        log.info("Marine field manager initialized")
+    
+    def get_database_field_mappings(self, selected_fields):
+        """
+        Convert field selection to database field mappings using configuration data.
+        
+        Args:
+            selected_fields (dict): Selected fields by module
+                {
+                    'coops_module': ['current_water_level', 'next_high_time'],
+                    'ndbc_module': ['wave_height', 'sea_surface_temp']
+                }
+                
+        Returns:
+            dict: Database field mappings
+                {
+                    'marine_current_water_level': 'REAL',
+                    'marine_next_high_time': 'TEXT',
+                    'marine_wave_height': 'REAL'
+                }
+        """
+        mappings = {}
+        
+        if not self.config_dict:
+            log.error("No configuration data available for field mappings")
+            return mappings
+            
+        service_config = self.config_dict.get('MarineDataService', {})
+        if not service_config:
+            log.error("No MarineDataService configuration found")
+            return mappings
+            
+        field_mappings = service_config.get('field_mappings', {})
+        if not field_mappings:
+            log.error("No field_mappings found in service configuration")
+            return mappings
+        
+        # Extract database fields from configuration mappings
+        for module_name, field_list in selected_fields.items():
+            if isinstance(field_list, list):
+                module_mappings = field_mappings.get(module_name, {})
+                if not module_mappings:
+                    log.error(f"No field mappings found for module '{module_name}'")
+                    continue
+                    
+                for service_field in field_list:
+                    field_mapping = module_mappings.get(service_field, {})
+                    if not isinstance(field_mapping, dict):
+                        log.error(f"Invalid field mapping for {module_name}.{service_field}: {field_mapping}")
+                        continue
+                        
+                    db_field = field_mapping.get('database_field')
+                    db_type = field_mapping.get('database_type')
+                    
+                    if not db_field:
+                        log.error(f"No database_field defined for {module_name}.{service_field}")
+                        continue
+                        
+                    if not db_type:
+                        log.error(f"No database_type defined for {module_name}.{service_field}")
+                        continue
+                        
+                    mappings[db_field] = db_type
+        
+        return mappings
+    
+    def map_service_to_database_field(self, service_field, module_name):
+        """
+        Map service field name to database field name using configuration data.
+        
+        Args:
+            service_field (str): Service field name (e.g., 'current_water_level')
+            module_name (str): Module name (e.g., 'coops_module')
+            
+        Returns:
+            str: Database field name or None if mapping not found
+        """
+        try:
+            if not self.config_dict:
+                log.error(f"No configuration data available for field mapping: {service_field}")
+                return None
+                
+            service_config = self.config_dict.get('MarineDataService', {})
+            if not service_config:
+                log.error(f"No MarineDataService configuration found for field mapping: {service_field}")
+                return None
+                
+            field_mappings = service_config.get('field_mappings', {})
+            if not field_mappings:
+                log.error(f"No field_mappings found in configuration for field: {service_field}")
+                return None
+                
+            module_mappings = field_mappings.get(module_name, {})
+            if not module_mappings:
+                log.error(f"No field mappings found for module '{module_name}' and field '{service_field}'")
+                return None
+                
+            field_mapping = module_mappings.get(service_field, {})
+            if not isinstance(field_mapping, dict):
+                log.error(f"Invalid field mapping for {module_name}.{service_field}: {field_mapping}")
+                return None
+                
+            database_field = field_mapping.get('database_field')
+            if not database_field:
+                log.error(f"No database_field defined for {module_name}.{service_field}")
+                return None
+                
+            return database_field
+            
+        except Exception as e:
+            log.error(f"Error mapping service field {service_field}: {e}")
+            return None
+
+
+class COOPSBackgroundThread(threading.Thread):
+    """
+    Background thread for high-frequency CO-OPS data collection.
+    
+    Handles 10-minute collection intervals for water level observations and water temperature
+    with thread-safe data storage and automatic error recovery.
+    """
+    
+    def __init__(self, config, selected_stations, config_dict=None):
+        """
+        Initialize CO-OPS background collection thread.
+        
+        Args:
+            config (dict): Service configuration
+            selected_stations (list): List of CO-OPS station IDs
+            config_dict: WeeWX configuration dictionary
+        """
+        super(COOPSBackgroundThread, self).__init__(name='COOPSBackgroundThread')
+        self.daemon = True
+        self.config = config
+        self.selected_stations = selected_stations
+        self.running = True
+        
+        # Initialize API client
+        self.api_client = COOPSAPIClient(
+            timeout=int(config.get('timeout', 30)),
+            config_dict=config_dict
+        )
+        
+        # Thread-safe data storage
+        self.data_lock = threading.Lock()
+        self.latest_data = {}
+        
+        # Collection intervals (10 minutes for high-frequency data)
+        self.collection_interval = int(config.get('coops_collection_interval', 600))  # 10 minutes
+        
+        # Track last collection times per station
+        self.last_collection = {station_id: 0 for station_id in selected_stations}
+        
+        # Database manager for direct insertion
+        self.db_manager = MarineDatabaseManager(config_dict)
+        
+        log.info(f"CO-OPS background thread initialized for {len(selected_stations)} stations")
+    
+    def run(self):
+        """
+        Main background thread loop for CO-OPS data collection.
+        """
+        log.info("CO-OPS background thread started")
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Collect from each selected station
+                for station_id in self.selected_stations:
+                    if (current_time - self.last_collection[station_id] >= self.collection_interval):
+                        self._collect_station_data(station_id)
+                        self.last_collection[station_id] = current_time
+                
+                # Sleep for 1 minute before checking again
+                time.sleep(60)
+                
+            except Exception as e:
+                log.error(f"Error in CO-OPS background thread: {e}")
+                time.sleep(300)  # Sleep 5 minutes on error
+    
+    def _collect_station_data(self, station_id):
+        """
+        Collect all available data from a single CO-OPS station.
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+        """
+        log.debug(f"Collecting CO-OPS data from station {station_id}")
+        
+        collected_data = []
+        
+        try:
+            # Collect water level data
+            water_level_data = self.api_client.collect_water_level(station_id)
+            if water_level_data:
+                collected_data.append(water_level_data)
+            
+            # Collect water temperature data (if available)
+            water_temp_data = self.api_client.collect_water_temperature(station_id)
+            if water_temp_data:
+                # Merge with water level data or create separate record
+                if water_level_data:
+                    water_level_data.update({
+                        'water_temperature': water_temp_data.get('water_temperature'),
+                        'water_temp_flags': water_temp_data.get('flags', '')
+                    })
+                else:
+                    collected_data.append(water_temp_data)
+            
+            # Store in thread-safe manner
+            if collected_data:
+                with self.data_lock:
+                    self.latest_data[station_id] = collected_data
+                
+                # Insert directly into database
+                self.db_manager.insert_coops_data(collected_data)
+                
+                log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
+                if log_success:
+                    log.info(f"Collected CO-OPS data from station {station_id}: {len(collected_data)} records")
+            
+        except MarineDataAPIError as e:
+            log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+            if log_errors:
+                log.error(f"CO-OPS API error for station {station_id}: {e}")
+        except Exception as e:
+            log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+            if log_errors:
+                log.error(f"Unexpected error collecting CO-OPS data from {station_id}: {e}")
+    
+    def get_latest_data(self):
+        """
+        Get latest collected CO-OPS data in thread-safe manner.
+        
+        Returns:
+            dict: Latest data organized by station ID
+        """
+        with self.data_lock:
+            return self.latest_data.copy()
+    
+    def shutdown(self):
+        """
+        Shutdown the CO-OPS background thread gracefully.
+        """
+        log.info("Shutting down CO-OPS background thread")
+        self.running = False
+
+
+class MarineBackgroundThread(threading.Thread):
+    """
+    Background thread for lower-frequency marine data collection.
+    
+    Handles hourly NDBC buoy data and 6-hourly tide predictions with coordinated
+    scheduling and thread-safe data storage.
+    """
+    
+    def __init__(self, config, selected_stations, config_dict=None):
+        """
+        Initialize marine background collection thread.
+        
+        Args:
+            config (dict): Service configuration
+            selected_stations (dict): Selected stations by type
+                {
+                    'coops_stations': ['9410230', '9410580'],
+                    'ndbc_stations': ['46087', '46025']
+                }
+            config_dict: WeeWX configuration dictionary
+        """
+        super(MarineBackgroundThread, self).__init__(name='MarineBackgroundThread')
+        self.daemon = True
+        self.config = config
+        self.selected_stations = selected_stations
+        self.running = True
+        
+        # Initialize API clients
+        self.coops_client = COOPSAPIClient(
+            timeout=int(config.get('timeout', 30)),
+            config_dict=config_dict
+        )
+        
+        self.ndbc_client = NDBCAPIClient(
+            timeout=int(config.get('timeout', 30)),
+            config_dict=config_dict
+        )
+        
+        # Thread-safe data storage
+        self.data_lock = threading.Lock()
+        self.latest_data = {}
+        
+        # Collection intervals
+        self.intervals = {
+            'tide_predictions': int(config.get('tide_predictions_interval', 21600)),  # 6 hours
+            'ndbc_weather': int(config.get('ndbc_weather_interval', 3600)),           # 1 hour
+            'ndbc_ocean': int(config.get('ndbc_ocean_interval', 3600))                # 1 hour
+        }
+        
+        # Track last collection times
+        self.last_collection = {
+            'tide_predictions': {},
+            'ndbc_weather': {},
+            'ndbc_ocean': {}
+        }
+        
+        # Initialize last collection times for all stations
+        for station_id in selected_stations.get('coops_stations', []):
+            self.last_collection['tide_predictions'][station_id] = 0
+        
+        for station_id in selected_stations.get('ndbc_stations', []):
+            self.last_collection['ndbc_weather'][station_id] = 0
+            self.last_collection['ndbc_ocean'][station_id] = 0
+        
+        # Database manager for direct insertion
+        self.db_manager = MarineDatabaseManager(config_dict)
+        
+        total_stations = len(selected_stations.get('coops_stations', [])) + len(selected_stations.get('ndbc_stations', []))
+        log.info(f"Marine background thread initialized for {total_stations} stations")
+    
+    def run(self):
+        """
+        Main background thread loop for marine data collection.
+        """
+        log.info("Marine background thread started")
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Collect tide predictions from CO-OPS stations
+                self._collect_tide_predictions(current_time)
+                
+                # Collect NDBC buoy data
+                self._collect_ndbc_data(current_time)
+                
+                # Sleep for 5 minutes before checking again
+                time.sleep(300)
+                
+            except Exception as e:
+                log.error(f"Error in marine background thread: {e}")
+                time.sleep(600)  # Sleep 10 minutes on error
+    
+    def _collect_tide_predictions(self, current_time):
+        """
+        Collect tide predictions from CO-OPS stations.
+        
+        Args:
+            current_time (float): Current timestamp
+        """
+        for station_id in self.selected_stations.get('coops_stations', []):
+            if (current_time - self.last_collection['tide_predictions'].get(station_id, 0) >= 
+                self.intervals['tide_predictions']):
+                
+                try:
+                    log.debug(f"Collecting tide predictions from CO-OPS station {station_id}")
+                    
+                    tide_data = self.coops_client.collect_tide_predictions(station_id)
+                    if tide_data:
+                        # Add metadata for database insertion
+                        tide_data.update({
+                            'station_type': 'coops',
+                            'data_type': 'tide_predictions'
+                        })
+                        
+                        # Store in thread-safe manner
+                        with self.data_lock:
+                            if station_id not in self.latest_data:
+                                self.latest_data[station_id] = {}
+                            self.latest_data[station_id]['tide_predictions'] = tide_data
+                        
+                        # Insert into database
+                        self.db_manager.insert_marine_forecast_data([tide_data])
+                        
+                        log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
+                        if log_success:
+                            log.info(f"Collected tide predictions from CO-OPS station {station_id}")
+                    
+                    self.last_collection['tide_predictions'][station_id] = current_time
+                    
+                except MarineDataAPIError as e:
+                    log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+                    if log_errors:
+                        log.error(f"CO-OPS tide prediction error for station {station_id}: {e}")
+                except Exception as e:
+                    log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+                    if log_errors:
+                        log.error(f"Unexpected error collecting tide predictions from {station_id}: {e}")
+    
+    def _collect_ndbc_data(self, current_time):
+        """
+        Collect NDBC buoy data (standard meteorological and ocean data).
+        
+        Args:
+            current_time (float): Current timestamp
+        """
+        for station_id in self.selected_stations.get('ndbc_stations', []):
+            # Collect standard meteorological data
+            if (current_time - self.last_collection['ndbc_weather'].get(station_id, 0) >= 
+                self.intervals['ndbc_weather']):
+                
+                try:
+                    log.debug(f"Collecting NDBC weather data from station {station_id}")
+                    
+                    weather_data = self.ndbc_client.collect_standard_met(station_id)
+                    if weather_data:
+                        # Add metadata for database insertion
+                        weather_data.update({
+                            'station_type': 'ndbc',
+                            'data_type': 'buoy_weather'
+                        })
+                        
+                        # Store in thread-safe manner
+                        with self.data_lock:
+                            if station_id not in self.latest_data:
+                                self.latest_data[station_id] = {}
+                            self.latest_data[station_id]['weather'] = weather_data
+                        
+                        # Insert into database
+                        self.db_manager.insert_marine_forecast_data([weather_data])
+                        
+                        log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
+                        if log_success:
+                            log.info(f"Collected NDBC weather data from station {station_id}")
+                    
+                    self.last_collection['ndbc_weather'][station_id] = current_time
+                    
+                except MarineDataAPIError as e:
+                    log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+                    if log_errors:
+                        log.error(f"NDBC weather data error for station {station_id}: {e}")
+                except Exception as e:
+                    log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
+                    if log_errors:
+                        log.error(f"Unexpected error collecting NDBC weather data from {station_id}: {e}")
+            
+            # Collect ocean data (when available)
+            if (current_time - self.last_collection['ndbc_ocean'].get(station_id, 0) >= 
+                self.intervals['ndbc_ocean']):
+                
+                try:
+                    ocean_data = self.ndbc_client.collect_ocean_data(station_id)
+                    if ocean_data:
+                        # Add metadata for database insertion
+                        ocean_data.update({
+                            'station_type': 'ndbc',
+                            'data_type': 'buoy_ocean'
+                        })
+                        
+                        # Store in thread-safe manner
+                        with self.data_lock:
+                            if station_id not in self.latest_data:
+                                self.latest_data[station_id] = {}
+                            self.latest_data[station_id]['ocean'] = ocean_data
+                        
+                        # Insert into database
+                        self.db_manager.insert_marine_forecast_data([ocean_data])
+                        
+                        log.debug(f"Collected NDBC ocean data from station {station_id}")
+                    
+                    self.last_collection['ndbc_ocean'][station_id] = current_time
+                    
+                except Exception as e:
+                    # Ocean data failures are non-critical (not all buoys have ocean sensors)
+                    log.debug(f"NDBC ocean data not available for station {station_id}: {e}")
+    
+    def get_latest_data(self):
+        """
+        Get latest collected marine data in thread-safe manner.
+        
+        Returns:
+            dict: Latest data organized by station ID and data type
+        """
+        with self.data_lock:
+            return self.latest_data.copy()
+    
+    def shutdown(self):
+        """
+        Shutdown the marine background thread gracefully.
+        """
+        log.info("Shutting down marine background thread")
+        self.running = False
+
+
+class MarineDataService(StdService):
+    """
+    Main WeeWX service for marine data collection from NOAA sources.
+    
+    Integrates CO-OPS (tides & currents) and NDBC (buoy weather) data with WeeWX
+    following proven StdService patterns with graceful degradation and never breaking WeeWX.
+    """
+    
+    def __init__(self, engine, config_dict):
+        """
+        Initialize marine data service with configuration validation and setup.
+        
+        Args:
+            engine: WeeWX engine instance
+            config_dict: WeeWX configuration dictionary
+        """
+        super(MarineDataService, self).__init__(engine, config_dict)
+        
+        log.info(f"Marine Data service version {VERSION} starting")
+        
+        self.engine = engine
+        self.config_dict = config_dict
+        
+        # Get marine data service configuration
+        self.service_config = config_dict.get('MarineDataService', {})
+        
+        if not self._validate_basic_config():
+            log.error("Marine Data service disabled due to configuration issues")
+            self.service_enabled = False
+            return
+        
+        # Load station selection from configuration
+        self.selected_stations = self._load_station_selection()
+        
+        if not self.selected_stations or not any(self.selected_stations.values()):
+            log.error("No stations selected - marine data collection disabled")
+            log.error("HINT: Run 'weectl extension reconfigure MarineData' to configure stations")
+            self.service_enabled = False
+            return
+        
+        # Load field selection from configuration
+        self.selected_fields = self._load_field_selection()
+        
+        if not self.selected_fields:
+            log.error("No field selection found - service disabled")
+            log.error("HINT: Run 'weectl extension reconfigure MarineData' to configure fields")
+            self.service_enabled = False
+            return
+        
+        # Validate and clean field selection
+        self.active_fields = self._validate_and_clean_selection()
+        
+        if not self.active_fields:
+            log.error("No usable fields found - all fields have issues")
+            log.error("Marine Data service disabled - no usable fields available")
+            log.error("HINT: Run 'weectl extension reconfigure MarineData' to fix configuration")
+            self.service_enabled = False
+            return
+        
+        # Initialize components
+        self._initialize_data_collection()
+        self._setup_unit_system()
+        
+        # Bind to archive events for data injection
+        self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
+        
+        log.info("Marine Data service initialized successfully")
+        self.service_enabled = True
+    
+    def _validate_basic_config(self):
+        """
+        Validate basic service configuration requirements.
+        
+        Returns:
+            bool: True if configuration is valid for operation
+        """
+        if not self.service_config:
+            log.error("MarineDataService configuration section not found")
+            return False
+        
+        if not self.service_config.get('enable', '').lower() == 'true':
+            log.info("Marine Data service disabled in configuration")
+            return False
+        
+        # Check for station coordinates (required for station discovery)
+        station_config = self.config_dict.get('Station', {})
+        latitude = station_config.get('latitude', 0.0)
+        longitude = station_config.get('longitude', 0.0)
+        
+        if not latitude or not longitude:
+            log.error("Station coordinates not configured - required for marine data collection")
+            log.error("HINT: Configure latitude and longitude in [Station] section")
+            return False
+        
+        return True
+    
+    def _load_station_selection(self):
+        """
+        Load selected stations from configuration.
+        
+        Returns:
+            dict: Selected stations by type
+                {
+                    'coops_stations': ['9410230', '9410580'],
+                    'ndbc_stations': ['46087', '46025']
+                }
+        """
+        selected_stations_config = self.service_config.get('selected_stations', {})
+        
+        if not selected_stations_config:
+            log.error("No selected_stations section found in configuration")
+            return {}
+        
+        selected_stations = {}
+        
+        # Load CO-OPS stations
+        coops_config = selected_stations_config.get('coops_stations', {})
+        if coops_config:
+            coops_stations = [station_id for station_id, enabled in coops_config.items() 
+                             if str(enabled).lower() == 'true']
+            if coops_stations:
+                selected_stations['coops_stations'] = coops_stations
+                log.info(f"Loaded {len(coops_stations)} CO-OPS stations")
+        
+        # Load NDBC stations
+        ndbc_config = selected_stations_config.get('ndbc_stations', {})
+        if ndbc_config:
+            ndbc_stations = [station_id for station_id, enabled in ndbc_config.items() 
+                            if str(enabled).lower() == 'true']
+            if ndbc_stations:
+                selected_stations['ndbc_stations'] = ndbc_stations
+                log.info(f"Loaded {len(ndbc_stations)} NDBC stations")
+        
+        if not selected_stations:
+            log.error("No stations selected in configuration")
+            return {}
+        
+        log.info(f"Loaded station selection: {list(selected_stations.keys())}")
+        return selected_stations
+    
+    def _load_field_selection(self):
+        """
+        Load field selection from configuration.
+        
+        Returns:
+            dict: Selected fields by module
+                {
+                    'coops_module': ['current_water_level', 'next_high_time'],
+                    'ndbc_module': ['wave_height', 'sea_surface_temp']
+                }
+        """
+        field_selection_config = self.service_config.get('field_selection', {})
+        
+        if not field_selection_config:
+            log.error("No field_selection section found in configuration")
+            return {}
+        
+        selected_fields_config = field_selection_config.get('selected_fields', {})
+        
+        if not selected_fields_config:
+            log.error("No selected_fields found in field_selection configuration")
+            return {}
+        
+        selected_fields = {}
+        
+        for module_name, field_list in selected_fields_config.items():
+            if isinstance(field_list, list) and field_list:
+                selected_fields[module_name] = field_list
+                log.info(f"Loaded {len(field_list)} fields for module '{module_name}'")
+            elif isinstance(field_list, str) and field_list:
+                # Handle string format (comma-separated) as fallback
+                field_list_parsed = [f.strip() for f in field_list.split(',') if f.strip()]
+                if field_list_parsed:
+                    selected_fields[module_name] = field_list_parsed
+                    log.info(f"Loaded {len(field_list_parsed)} fields for module '{module_name}'")
+            else:
+                log.warning(f"Invalid field configuration for module '{module_name}': {field_list}")
+        
+        if not selected_fields:
+            log.error("No field selections found in configuration")
+            return {}
+        
+        log.info(f"Loaded field selection: {list(selected_fields.keys())}")
+        return selected_fields
+    
+    def _validate_and_clean_selection(self):
+        """
+        Validate field selection and return only usable fields.
+        
+        Returns:
+            dict: Validated and cleaned field selection
+        """
+        if not self.selected_fields:
+            log.warning("No field selection available - marine data collection disabled")
+            return {}
+        
+        field_manager = MarineFieldManager(config_dict=self.config_dict)
+        active_fields = {}
+        total_selected = 0
+        
+        try:
+            # Get expected database fields based on selection  
+            expected_fields = field_manager.get_database_field_mappings(self.selected_fields)
+            
+            if not expected_fields:
+                log.warning("No database fields required for current selection")
+                return {}
+            
+            # Check which fields actually exist in database tables
+            existing_db_fields = self._get_existing_database_fields()
+            
+            # Validate each module's fields
+            for module, fields in self.selected_fields.items():
+                if not fields:
+                    continue
+                    
+                if isinstance(fields, list):
+                    total_selected += len(fields)
+                    active_module_fields = self._validate_module_fields(
+                        module, fields, expected_fields, existing_db_fields, field_manager
+                    )
+                else:
+                    log.warning(f"Invalid field selection format for module '{module}': {fields}")
+                    continue
+                
+                if active_module_fields:
+                    active_fields[module] = active_module_fields
+            
+            # Summary logging
+            total_active = self._count_active_fields(active_fields)
+            if total_active > 0:
+                log.info(f"Field validation complete: {total_active}/{total_selected} fields active")
+                if total_active < total_selected:
+                    log.warning(f"{total_selected - total_active} fields unavailable - see errors above")
+                    log.warning("HINT: Run 'weectl extension reconfigure MarineData' to fix field issues")
+            else:
+                log.error("No usable fields found - all fields have issues")
+            
+            return active_fields
+            
+        except Exception as e:
+            log.error(f"Field validation failed: {e}")
+            return {}
+    
+    def _validate_module_fields(self, module, fields, expected_fields, existing_db_fields, field_manager):
+        """
+        Validate fields for a specific module.
+        
+        Args:
+            module (str): Module name
+            fields (list): List of field names
+            expected_fields (dict): Expected database field mappings
+            existing_db_fields (list): Existing database fields
+            field_manager: Field manager instance
+            
+        Returns:
+            list: Valid field names
+        """
+        active_fields = []
+        
+        if not fields:
+            return active_fields
+        
+        for field in fields:
+            try:
+                # Find the database field name for this logical field
+                db_field = field_manager.map_service_to_database_field(field, module)
+                
+                if db_field is None:
+                    log.error(f"Cannot map field '{field}' in module '{module}' - configuration missing")
+                    continue
+                
+                # For marine data, we create tables during installation, so fields should exist
+                # If they don't exist, it's a configuration issue
+                if db_field not in existing_db_fields:
+                    log.warning(f"Database field '{db_field}' missing for '{module}.{field}' - will be created")
+                    # Note: Unlike OpenWeather, we still consider the field active and will create it
+                
+                # Field is valid and available (or will be created)
+                active_fields.append(field)
+                
+            except Exception as e:
+                log.error(f"Error validating field '{field}' in module '{module}': {e}")
+                continue
+        
+        if active_fields:
+            log.info(f"Module '{module}': {len(active_fields)}/{len(fields)} fields active")
+        else:
+            log.warning(f"Module '{module}': no usable fields")
+        
+        return active_fields
+    
+    def _get_existing_database_fields(self):
+        """
+        Get list of existing marine database fields from both tables.
+        
+        Returns:
+            list: List of existing marine database field names
+        """
+        try:
+            db_binding = 'wx_binding'
+            existing_fields = []
+            
+            with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
+                # Check CO-OPS data table
+                try:
+                    for column in dbmanager.connection.genSchemaOf('coops_data'):
+                        field_name = column[1]
+                        if field_name.startswith('marine_'):
+                            existing_fields.append(field_name)
+                except:
+                    log.debug("CO-OPS data table does not exist yet")
+                
+                # Check marine forecast data table
+                try:
+                    for column in dbmanager.connection.genSchemaOf('marine_forecast_data'):
+                        field_name = column[1]
+                        if field_name.startswith('marine_'):
+                            existing_fields.append(field_name)
+                except:
+                    log.debug("Marine forecast data table does not exist yet")
+            
+            return existing_fields
+            
+        except Exception as e:
+            log.error(f"Error checking database fields: {e}")
+            return []
+    
+    def _initialize_data_collection(self):
+        """
+        Initialize data collection components with background threads.
+        """
+        try:
+            # Initialize field manager
+            self.field_manager = MarineFieldManager(config_dict=self.config_dict)
+            
+            # Initialize database manager
+            self.db_manager = MarineDatabaseManager(self.config_dict)
+            
+            # Create database tables if needed
+            self.db_manager.create_marine_tables(self.active_fields, self.selected_stations)
+            
+            # Initialize background threads based on selected station types
+            self.background_threads = []
+            
+            # Start CO-OPS background thread if CO-OPS stations are selected
+            if self.selected_stations.get('coops_stations'):
+                self.coops_thread = COOPSBackgroundThread(
+                    config=self.service_config,
+                    selected_stations=self.selected_stations['coops_stations'],
+                    config_dict=self.config_dict
+                )
+                self.coops_thread.start()
+                self.background_threads.append(self.coops_thread)
+                log.info("CO-OPS background thread started")
+            
+            # Start marine background thread for NDBC data and tide predictions
+            if (self.selected_stations.get('ndbc_stations') or 
+                self.selected_stations.get('coops_stations')):
+                self.marine_thread = MarineBackgroundThread(
+                    config=self.service_config,
+                    selected_stations=self.selected_stations,
+                    config_dict=self.config_dict
+                )
+                self.marine_thread.start()
+                self.background_threads.append(self.marine_thread)
+                log.info("Marine background thread started")
+            
+            log.info("Marine data collection initialized successfully")
+            self.service_enabled = True
+            
+        except Exception as e:
+            log.error(f"Failed to initialize data collection: {e}")
+            log.error("Marine data collection disabled")
+            self.service_enabled = False
+    
+    def _setup_unit_system(self):
+        """
+        Set up WeeWX unit system integration for marine data fields.
+        """
+        try:
+            import weewx.units
+            
+            # Get unit system info from configuration
+            unit_config = self.service_config.get('unit_system', {})
+            weewx_unit_system = unit_config.get('weewx_system', 'US')
+            
+            log.info(f"Unit system: WeeWX='{weewx_unit_system}' for marine data")
+            
+            # Add marine-specific unit groups
+            if 'group_distance_marine' not in weewx.units.USUnits:
+                weewx.units.USUnits['group_distance_marine'] = 'foot'
+                weewx.units.MetricUnits['group_distance_marine'] = 'meter'
+                weewx.units.MetricWXUnits['group_distance_marine'] = 'meter'
+            
+            # Read unit groups from configuration field mappings
+            conf_field_mappings = self.service_config.get('field_mappings', {})
+            
+            for module_name, field_list in self.active_fields.items():
+                module_mappings = conf_field_mappings.get(module_name, {})
+                
+                for service_field in field_list:
+                    field_mapping = module_mappings.get(service_field, {})
+                    
+                    if isinstance(field_mapping, dict):
+                        db_field = field_mapping.get('database_field', f'marine_{service_field}')
+                        unit_group = field_mapping.get('unit_group', 'group_count')
+                        
+                        # Assign unit group from configuration data
+                        weewx.units.obs_group_dict[db_field] = unit_group
+            
+            log.info("Marine unit system setup completed")
+            
+        except Exception as e:
+            log.error(f"Failed to setup unit system: {e}")
+    
+    def _count_active_fields(self, fields=None):
+        """
+        Count total active fields across all modules.
+        
+        Args:
+            fields (dict): Field dictionary to count (defaults to self.active_fields)
+            
+        Returns:
+            int: Total number of active fields
+        """
+        if fields is None:
+            fields = self.active_fields
+        return sum(len(module_fields) for module_fields in fields.values() if isinstance(module_fields, list))
+    
+    def new_archive_record(self, event):
+        """
+        Inject marine data into WeeWX archive record - never fails, graceful degradation only.
+        
+        Args:
+            event: WeeWX NEW_ARCHIVE_RECORD event containing the record
+        """
+        if not self.service_enabled:
+            return  # Silently skip if service is disabled
+        
+        try:
+            # Get latest collected data from background threads
+            collected_data = self.get_latest_data()
+            
+            if not collected_data:
+                return  # No data available
+            
+            # Build record with expected marine fields, using None for missing data
+            record_update = {}
+            
+            # Get expected database fields
+            expected_fields = self.field_manager.get_database_field_mappings(self.active_fields)
+            
+            fields_injected = 0
+            for db_field, field_type in expected_fields.items():
+                # Look for this field in collected data
+                field_value = None
+                
+                # Search through all station data for this field
+                for station_data in collected_data.values():
+                    if isinstance(station_data, dict):
+                        for data_type, data_records in station_data.items():
+                            if isinstance(data_records, dict) and db_field in data_records:
+                                field_value = data_records[db_field]
+                                break
+                            elif isinstance(data_records, list):
+                                for record in data_records:
+                                    if isinstance(record, dict) and db_field in record:
+                                        field_value = record[db_field]
+                                        break
+                        if field_value is not None:
+                            break
+                
+                # Inject the field value (None if not found)
+                record_update[db_field] = field_value
+                if field_value is not None:
+                    fields_injected += 1
+            
+            # Update the archive record
+            event.record.update(record_update)
+            
+            if fields_injected > 0:
+                log.debug(f"Injected marine data: {fields_injected}/{len(expected_fields)} fields")
+            else:
+                log.debug("No marine data available for injection")
+                
+        except Exception as e:
+            log.error(f"Error injecting marine data: {e}")
+            # Never re-raise - would break WeeWX
+    
+    def get_latest_data(self):
+        """
+        Get latest collected data from all background threads.
+        
+        Returns:
+            dict: Combined latest data from all sources
+        """
+        try:
+            combined_data = {}
+            
+            # Get CO-OPS data if available
+            if hasattr(self, 'coops_thread') and self.coops_thread:
+                coops_data = self.coops_thread.get_latest_data()
+                if coops_data:
+                    combined_data.update(coops_data)
+            
+            # Get marine data if available
+            if hasattr(self, 'marine_thread') and self.marine_thread:
+                marine_data = self.marine_thread.get_latest_data()
+                if marine_data:
+                    # Merge with existing data
+                    for station_id, station_data in marine_data.items():
+                        if station_id in combined_data:
+                            combined_data[station_id].update(station_data)
+                        else:
+                            combined_data[station_id] = station_data
+            
+            return combined_data
+            
+        except Exception as e:
+            log.error(f"Error getting latest marine data: {e}")
+            return {}
+    
+    def shutDown(self):
+        """
+        Clean shutdown of marine data service and all background threads.
+        """
+        try:
+            log.info("Shutting down Marine Data service")
+            
+            # Shutdown all background threads
+            if hasattr(self, 'background_threads'):
+                for thread in self.background_threads:
+                    if thread and hasattr(thread, 'shutdown'):
+                        thread.shutdown()
+            
+            # Shutdown specific threads
+            if hasattr(self, 'coops_thread') and self.coops_thread:
+                self.coops_thread.shutdown()
+            
+            if hasattr(self, 'marine_thread') and self.marine_thread:
+                self.marine_thread.shutdown()
+            
+            log.info("Marine Data service shutdown complete")
+            
+        except Exception as e:
+            log.error(f"Error during Marine Data shutdown: {e}")
+
+
+class MarineDataTester:
+    """
+    Simple integrated testing framework for Marine Data extension.
+    
+    Provides installation verification, API connectivity testing, and station validation
+    following OpenWeather extension testing patterns.
+    """
+    
+    def __init__(self):
+        """
+        Initialize marine data tester with configuration loading.
+        """
+        self.latitude = None
+        self.longitude = None
+        
+        print(f"Marine Data Extension Tester v{VERSION}")
+        print("=" * 60)
+        
+        # Initialize required data structures
+        self.config_dict = None
+        self.service_config = None
+        self.station_manager = None
+        
+        # Load real WeeWX configuration
+        self._load_weewx_config()
+        
+        # Initialize components if config is available
+        if self.config_dict:
+            self.station_manager = StationManager(config_dict=self.config_dict)
+            self.service_config = self.config_dict.get('MarineDataService', {})
+            
+            # Get station coordinates from WeeWX configuration
+            station_config = self.config_dict.get('Station', {})
+            self.latitude = float(station_config.get('latitude', 0.0))
+            self.longitude = float(station_config.get('longitude', 0.0))
+            
+            if self.latitude != 0.0 and self.longitude != 0.0:
+                print(f"Testing location: {self.latitude}, {self.longitude}")
+            else:
+                print("⚠️ No station coordinates configured")
+        else:
+            print("⚠️ No WeeWX configuration loaded")
+    
+    def _load_weewx_config(self):
+        """
+        Load the actual WeeWX configuration from standard locations.
+        """
+        config_paths = [
+            '/etc/weewx/weewx.conf',
+            '/home/weewx/weewx.conf',
+            '/opt/weewx/weewx.conf',
+            os.path.expanduser('~/weewx-data/weewx.conf')
+        ]
+        
+        for config_path in config_paths:
+            if os.path.exists(config_path):
+                try:
+                    import configobj
+                    self.config_dict = configobj.ConfigObj(config_path)
+                    print(f"✓ Loaded WeeWX configuration: {config_path}")
+                    return
+                except Exception as e:
+                    print(f"❌ Error loading {config_path}: {e}")
+                    continue
+        
+        print("❌ No WeeWX configuration found - extension may not be installed")
+    
+    def test_installation(self):
+        """
+        Test if marine data extension is properly installed.
+        
+        Returns:
+            bool: True if installation is valid
+        """
+        print("\n🔧 TESTING INSTALLATION")
+        print("-" * 40)
+        
+        if not self.config_dict:
+            print("❌ No WeeWX configuration available")
+            return False
+        
+        success = True
+        
+        # Check service registration
+        print("Checking service registration...")
+        try:
+            engine_config = self.config_dict.get('Engine', {})
+            services_config = engine_config.get('Services', {})
+            data_services = services_config.get('data_services', '')
+            
+            if isinstance(data_services, list):
+                data_services = ', '.join(data_services)
+            
+            if 'user.marine_data.MarineDataService' in data_services:
+                print("  ✓ Service registered in WeeWX configuration")
+            else:
+                print("  ❌ Service not registered in data_services")
+                success = False
+        except Exception as e:
+            print(f"  ❌ Error checking service registration: {e}")
+            success = False
+        
+        # Check MarineDataService configuration
+        print("Checking service configuration...")
+        if self.service_config:
+            print("  ✓ MarineDataService section found")
+            
+            # Check station selection
+            selected_stations = self.service_config.get('selected_stations', {})
+            if selected_stations:
+                coops_count = len([s for s in selected_stations.get('coops_stations', {}).values() if s])
+                ndbc_count = len([s for s in selected_stations.get('ndbc_stations', {}).values() if s])
+                print(f"  ✓ Station selection configured: {coops_count} CO-OPS, {ndbc_count} NDBC")
+            else:
+                print("  ❌ No station selection configured")
+                success = False
+        else:
+            print("  ❌ No MarineDataService configuration found")
+            success = False
+        
+        # Check station coordinates
+        print("Checking station coordinates...")
+        if self.latitude is not None and self.longitude is not None:
+            if self.latitude != 0.0 and self.longitude != 0.0:
+                print(f"  ✓ Station coordinates configured: {self.latitude}, {self.longitude}")
+            else:
+                print("  ❌ Station coordinates are zero - invalid location")
+                success = False
+        else:
+            print("  ❌ No station coordinates found in configuration")
+            success = False
+        
+        # Check database tables
+        print("Checking database tables...")
+        try:
+            db_tables = self._get_database_tables()
+            marine_tables = [t for t in db_tables if t in ['coops_data', 'marine_forecast_data']]
+            
+            if marine_tables:
+                print(f"  ✓ Found marine database tables: {', '.join(marine_tables)}")
+            else:
+                print("  ❌ No marine database tables found")
+                success = False
+        except Exception as e:
+            print(f"  ❌ Error checking database tables: {e}")
+            success = False
+        
+        return success
+    
+    def test_station_discovery(self):
+        """
+        Test station discovery functionality.
+        
+        Returns:
+            bool: True if station discovery works
+        """
+        print("\n🗺️ TESTING STATION DISCOVERY")
+        print("-" * 40)
+        
+        if not self.station_manager:
+            print("❌ Station manager not initialized")
+            return False
+        
+        if self.latitude == 0.0 and self.longitude == 0.0:
+            print("❌ Invalid station coordinates - cannot test discovery")
+            return False
+        
+        success = True
+        
+        try:
+            print("Discovering nearby stations...")
+            nearby_stations = self.station_manager.discover_nearby_stations(max_distance_miles=100)
+            
+            coops_count = len(nearby_stations.get('coops', []))
+            ndbc_count = len(nearby_stations.get('ndbc', []))
+            
+            if coops_count > 0:
+                print(f"  ✓ Found {coops_count} CO-OPS stations within 100 miles")
+                # Show closest station
+                closest_coops = nearby_stations['coops'][0] if nearby_stations['coops'] else None
+                if closest_coops:
+                    print(f"    Closest: {closest_coops['name']} ({closest_coops['distance']} miles)")
+            else:
+                print("  ⚠️ No CO-OPS stations found within 100 miles")
+            
+            if ndbc_count > 0:
+                print(f"  ✓ Found {ndbc_count} NDBC stations within 100 miles")
+                # Show closest station
+                closest_ndbc = nearby_stations['ndbc'][0] if nearby_stations['ndbc'] else None
+                if closest_ndbc:
+                    print(f"    Closest: {closest_ndbc['name']} ({closest_ndbc['distance']} miles)")
+            else:
+                print("  ⚠️ No NDBC stations found within 100 miles")
+            
+            if coops_count == 0 and ndbc_count == 0:
+                print("  ❌ No marine stations found - check location or expand search radius")
+                success = False
+            
+        except Exception as e:
+            print(f"  ❌ Station discovery failed: {e}")
+            success = False
+        
+        return success
+    
+    def test_api_connectivity(self):
+        """
+        Test API connectivity to configured marine data sources.
+        
+        Returns:
+            bool: True if APIs are accessible
+        """
+        print("\n🌐 TESTING API CONNECTIVITY")
+        print("-" * 40)
+        
+        if not self.service_config:
+            print("❌ No service configuration available")
+            return False
+        
+        success = True
+        
+        # Test CO-OPS API
+        print("Testing CO-OPS API connectivity...")
+        try:
+            coops_client = COOPSAPIClient(timeout=30, config_dict=self.config_dict)
+            
+            # Test with a well-known station (La Jolla)
+            test_station = '9410230'
+            water_level_data = coops_client.collect_water_level(test_station)
+            
+            if water_level_data and 'water_level' in water_level_data:
+                print(f"  ✓ CO-OPS API working: {water_level_data['water_level']:.2f} ft at {test_station}")
+            else:
+                print("  ❌ CO-OPS API: No valid water level data received")
+                success = False
+                
+        except MarineDataAPIError as e:
+            print(f"  ❌ CO-OPS API error: {e}")
+            success = False
+        except Exception as e:
+            print(f"  ❌ CO-OPS API unexpected error: {e}")
+            success = False
+        
+        # Test NDBC API
+        print("Testing NDBC API connectivity...")
+        try:
+            ndbc_client = NDBCAPIClient(timeout=30, config_dict=self.config_dict)
+            
+            # Test with a well-known buoy (California coastal)
+            test_buoy = '46087'
+            buoy_data = ndbc_client.collect_standard_met(test_buoy)
+            
+            if buoy_data and 'wave_height' in buoy_data:
+                print(f"  ✓ NDBC API working: {buoy_data['wave_height']:.1f}m waves at {test_buoy}")
+            else:
+                print("  ❌ NDBC API: No valid buoy data received")
+                success = False
+                
+        except MarineDataAPIError as e:
+            print(f"  ❌ NDBC API error: {e}")
+            success = False
+        except Exception as e:
+            print(f"  ❌ NDBC API unexpected error: {e}")
+            success = False
+        
+        return success
+    
+    def _get_database_tables(self):
+        """
+        Get list of database tables.
+        
+        Returns:
+            list: List of table names
+        """
+        if not self.config_dict:
+            return []
+        
+        try:
+            db_binding = 'wx_binding'
+            with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
+                tables = []
+                
+                # Get table list (method varies by database type)
+                if 'sqlite' in str(dbmanager.connection).lower():
+                    # SQLite
+                    cursor = dbmanager.connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                    tables = [row[0] for row in cursor.fetchall()]
+                else:
+                    # MySQL
+                    cursor = dbmanager.connection.execute("SHOW TABLES")
+                    tables = [row[0] for row in cursor.fetchall()]
+                
+                return tables
+                
+        except Exception as e:
+            raise Exception(f"Database table access failed: {e}")
+    
+    def run_basic_tests(self):
+        """
+        Run essential marine data extension tests.
+        
+        Returns:
+            bool: True if all tests pass
+        """
+        print(f"\n🧪 RUNNING BASIC MARINE DATA TESTS")
+        print("=" * 60)
+        print(f"Marine Data Extension v{VERSION}")
+        print("=" * 60)
+        
+        tests_passed = 0
+        total_tests = 0
+        
+        # Test installation
+        total_tests += 1
+        if self.test_installation():
+            tests_passed += 1
+            print("\nInstallation Test: ✅ PASSED")
+        else:
+            print("\nInstallation Test: ❌ FAILED")
+        
+        # Test station discovery
+        total_tests += 1
+        if self.test_station_discovery():
+            tests_passed += 1
+            print("\nStation Discovery Test: ✅ PASSED")
+        else:
+            print("\nStation Discovery Test: ❌ FAILED")
+        
+        # Test API connectivity
+        total_tests += 1
+        if self.test_api_connectivity():
+            tests_passed += 1
+            print("\nAPI Connectivity Test: ✅ PASSED")
+        else:
+            print("\nAPI Connectivity Test: ❌ FAILED")
+        
+        # Summary
+        print("\n" + "=" * 60)
+        print(f"BASIC TEST SUMMARY: {tests_passed}/{total_tests} tests passed")
+        
+        if tests_passed == total_tests:
+            print("🎉 ALL BASIC TESTS PASSED!")
+            print("Marine Data extension is properly installed and ready to use.")
+        else:
+            print("❌ SOME TESTS FAILED")
+            print("Check the output above for specific issues.")
+        
+        return tests_passed == total_tests
+
+
+def main():
+    """
+    Main function for command-line testing of Marine Data extension.
+    """
+    parser = argparse.ArgumentParser(
+        description='Marine Data Extension Testing',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Test installation only
+  python3 marine_data.py --test-install
+  
+  # Test station discovery
+  python3 marine_data.py --test-stations
+  
+  # Test everything
+  python3 marine_data.py --test-all
+        """
+    )
+    
+    # Test options
+    parser.add_argument('--test-install', action='store_true',
+                       help='Test installation (database + service registration)')
+    parser.add_argument('--test-stations', action='store_true',
+                       help='Test station discovery functionality')
+    parser.add_argument('--test-api', action='store_true', 
+                       help='Test API connectivity')
+    parser.add_argument('--test-all', action='store_true',
+                       help='Run all basic tests')
+    
+    args = parser.parse_args()
+    
+    # Initialize tester
+    tester = MarineDataTester()
+    
+    # Run requested tests
+    if args.test_all:
+        success = tester.run_basic_tests()
+    elif args.test_install:
+        success = tester.test_installation()
+    elif args.test_stations:
+        success = tester.test_station_discovery()
+    elif args.test_api:
+        success = tester.test_api_connectivity()
+    else:
+        print("No tests specified. Use --help to see available options.")
+        print("\nQuick options:")
+        print("  --test-all       # Test installation + stations + API")
+        print("  --test-install   # Test installation only")
+        print("  --test-stations  # Test station discovery")
+        print("  --test-api       # Test API connectivity")
+        return
+    
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
+
+
+if __name__ == '__main__':
+    main()
