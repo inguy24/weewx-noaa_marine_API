@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Stork
+# Magic Animal: Bongo
 """
 WeeWX Marine Data Extension Installer
 
@@ -243,25 +243,28 @@ class MarineDataConfigurator:
                 print("\n\n⚠️  Setup cancelled by user.")
                 sys.exit(1)
     
-    def _discover_stations(self, user_lat, user_lon, max_distance_km=100):
-        """Discover marine stations within specified distance."""
+    def _discover_stations(self, user_lat, user_lon, max_distance_km=250):
+        """Discover marine stations within specified distance with hard limits."""
         all_stations = []
         
-        # Discover CO-OPS stations
-        print("  🔍 Searching CO-OPS (Tides & Currents) stations...")
-        coops_stations = self._discover_coops_stations(user_lat, user_lon, max_distance_km)
+        # Apply hard distance limit of 250km max
+        search_distance = min(max_distance_km, 250)
+        
+        # Discover CO-OPS stations (max 10)
+        print(f"  🔍 Searching CO-OPS (Tides & Currents) stations within {search_distance}km...")
+        coops_stations = self._discover_coops_stations(user_lat, user_lon, search_distance)
         all_stations.extend(coops_stations)
         
-        # Discover NDBC stations
-        print("  🔍 Searching NDBC (Buoy) stations...")
-        ndbc_stations = self._discover_ndbc_stations(user_lat, user_lon, max_distance_km)
+        # Discover NDBC stations (max 10)
+        print(f"  🔍 Searching NDBC (Buoy) stations within {search_distance}km...")
+        ndbc_stations = self._discover_ndbc_stations(user_lat, user_lon, search_distance)
         all_stations.extend(ndbc_stations)
         
-        print(f"  ✅ Found {len(all_stations)} stations within {max_distance_km}km")
+        print(f"  ✅ Found {len(all_stations)} stations within {search_distance}km (max 20 total)")
         return all_stations
     
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover CO-OPS stations using YAML-configured URL."""
+        """Discover CO-OPS stations using YAML-configured URL with hard limits."""
         stations = []
         try:
             # GET URL FROM CONSOLIDATED api_modules SECTION
@@ -279,12 +282,6 @@ class MarineDataConfigurator:
             data = response.json()
             raw_stations = data.get('stations', [])
             print(f"  📊 Processing {len(raw_stations)} CO-OPS stations...")
-
-            # Add these debug lines in the current _discover_coops_stations method:
-            print(f"  🔍 DEBUG: Type of raw_stations: {type(raw_stations)}")
-            if raw_stations:
-                print(f"  🔍 DEBUG: Type of first element: {type(raw_stations[0])}")
-                print(f"  🔍 DEBUG: First few elements types: {[type(x) for x in raw_stations[:5]]}")
             
             processed_count = 0
             for station_data in raw_stations:
@@ -299,12 +296,7 @@ class MarineDataConfigurator:
                     distance = self._calculate_distance(user_lat, user_lon, station_lat, station_lon)
                     
                     if distance <= max_distance_km:
-                        # Parse available products/data types
-                        products = station_data.get('shefcodes', [])
-                        if not products:
-                            products = station_data.get('products', [])
-                        
-                        # Determine station capabilities
+                        # Get actual capabilities from products API
                         capabilities = self._parse_coops_capabilities(station_data)
                         
                         station_info = {
@@ -316,7 +308,6 @@ class MarineDataConfigurator:
                             'distance_miles': distance * 0.621371,
                             'type': 'coops',
                             'state': station_state,
-                            'products': products,
                             'capabilities': capabilities,
                             'status': station_data.get('status', 'unknown'),
                             'last_data': station_data.get('metadata', {}).get('last_data', 'unknown')
@@ -328,41 +319,68 @@ class MarineDataConfigurator:
                 except (ValueError, TypeError, KeyError) as e:
                     continue  # Skip malformed station data
             
-            print(f"  ✅ Found {processed_count} CO-OPS stations within {max_distance_km}km")
+            # Apply hard limits: sort by distance and return max 10 closest
+            sorted_stations = sorted(stations, key=lambda x: x['distance_km'])
+            limited_stations = sorted_stations[:10]  # Hard limit of 10 stations max
+            
+            print(f"  ✅ Found {len(limited_stations)} CO-OPS stations (limited to 10 closest)")
             
         except Exception as e:
             print(f"❌ CO-OPS station discovery failed: {e}")
             return []
         
-        return sorted(stations, key=lambda x: x['distance_km'])
-    
+        return limited_stations
+
     def _parse_coops_capabilities(self, station_data):
-        """Parse CO-OPS station capabilities from API response."""
+        """Parse CO-OPS station capabilities by calling products API."""
         capabilities = []
         
-        # Check for water level data
-        if any(product.get('name', '').lower() in ['water_level', 'wl'] for product in station_data.get('products', [])):
+        # Get the products URL from station data
+        products_info = station_data.get('products', {})
+        products_url = products_info.get('self')
+        
+        if products_url:
+            try:
+                # Make API call to get actual products
+                response = requests.get(products_url, timeout=10)
+                if response.status_code == 200:
+                    products_data = response.json()
+                    products_list = products_data.get('products', [])
+                    
+                    # Parse the products list to determine capabilities
+                    for product in products_list:
+                        product_name = product.get('name', '').lower()
+                        if 'water level' in product_name:
+                            capabilities.append('Water Level')
+                        elif 'tide prediction' in product_name:
+                            capabilities.append('Tide Predictions') 
+                        elif 'meteorological' in product_name:
+                            capabilities.append('Weather Data')
+                            
+                else:
+                    # Fallback to basic capabilities if API call fails
+                    capabilities.append('Water Level')
+                    if station_data.get('tidal', False):
+                        capabilities.append('Tide Predictions')
+                        
+            except Exception as e:
+                # Fallback to basic capabilities if API call fails
+                capabilities.append('Water Level')
+                if station_data.get('tidal', False):
+                    capabilities.append('Tide Predictions')
+        else:
+            # No products URL available, use basic capabilities
             capabilities.append('Water Level')
+            if station_data.get('tidal', False):
+                capabilities.append('Tide Predictions')
         
-        # Check for tide predictions
-        if station_data.get('tidal', False) or 'predictions' in str(station_data.get('products', [])).lower():
-            capabilities.append('Tide Predictions')
-        
-        # Check for meteorological data
-        if any(product.get('name', '').lower() in ['met', 'meteorological'] for product in station_data.get('products', [])):
-            capabilities.append('Weather Data')
-        
-        # Check for water temperature
-        if any(product.get('name', '').lower() in ['water_temperature', 'temp'] for product in station_data.get('products', [])):
-            capabilities.append('Water Temperature')
-        
-        return capabilities if capabilities else ['Water Level']  # Default capability
+        return capabilities if capabilities else ['Water Level']
     
     def _discover_ndbc_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover NDBC stations using YAML-configured URL."""
+        """Discover NDBC stations using YAML-configured URL with hard limits."""
         stations = []
         try:
-            # GET URL FROM CONSOLIDATED api_modules SECTION ONLY
+            # GET URL FROM CONSOLIDATED api_modules SECTION
             ndbc_module = self.yaml_data.get('api_modules', {}).get('ndbc_module', {})
             metadata_url = ndbc_module.get('metadata_url')
             
@@ -374,7 +392,7 @@ class MarineDataConfigurator:
             response = requests.get(metadata_url, timeout=30)
             response.raise_for_status()
             
-            # Parse XML data with comprehensive error handling
+            # Parse XML data
             content = response.text
             import xml.etree.ElementTree as ET
             
@@ -413,8 +431,7 @@ class MarineDataConfigurator:
                                 'station_type': station_type,
                                 'owner': owner,
                                 'program': pgm,
-                                'capabilities': capabilities,
-                                'products': []  # NDBC products determined by data availability
+                                'capabilities': capabilities
                             }
                             
                             stations.append(station_info)
@@ -423,7 +440,11 @@ class MarineDataConfigurator:
                     except (ValueError, TypeError, AttributeError) as e:
                         continue  # Skip malformed station data
                 
-                print(f"  ✅ Found {processed_count} NDBC stations within {max_distance_km}km")
+                # Apply hard limits: sort by distance and return max 10 closest
+                sorted_stations = sorted(stations, key=lambda x: x['distance_km'])
+                limited_stations = sorted_stations[:10]  # Hard limit of 10 stations max
+                
+                print(f"  ✅ Found {len(limited_stations)} NDBC stations (limited to 10 closest)")
                 
             except ET.ParseError as e:
                 print(f"❌ NDBC XML parsing error: {e}")
@@ -433,7 +454,7 @@ class MarineDataConfigurator:
             print(f"❌ NDBC station discovery failed: {e}")
             return []
         
-        return sorted(stations, key=lambda x: x['distance_km'])
+        return limited_stations
     
     def _parse_ndbc_capabilities(self, station_type, station_element):
         """Parse NDBC station capabilities based on type and metadata."""
