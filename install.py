@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Western Lowland Gorilla
+# Magic Animal: Aldabra Tortoise
 """
 WeeWX Marine Data Extension Installer
 
@@ -139,10 +139,17 @@ class MarineDataConfigurator:
         
     def _load_yaml_definitions(self):
         """Load YAML field definitions - REQUIRED, NO fallbacks."""
-        yaml_path = os.path.join(os.path.dirname(__file__), 'marine_data_fields.yaml')
+        # Get extension directory (where install.py is located)
+        extension_dir = os.path.dirname(__file__)
+        # YAML file is in bin/user/ subdirectory according to MANIFEST
+        yaml_path = os.path.join(extension_dir, 'bin', 'user', 'marine_data_fields.yaml')
         
         if not os.path.exists(yaml_path):
-            print(f"❌ CRITICAL ERROR: marine_data_fields.yaml not found")
+            print(f"❌ CRITICAL ERROR: marine_data_fields.yaml not found at {yaml_path}")
+            print("   This file is REQUIRED for installation.")
+            print(f"   Extension directory: {extension_dir}")
+            if os.path.exists(extension_dir):
+                print(f"   Directory contents: {os.listdir(extension_dir)}")
             sys.exit(1)
             
         try:
