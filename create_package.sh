@@ -34,8 +34,8 @@ cp MANIFEST ${PACKAGE_DIR}/ || { echo "Error: MANIFEST not found"; exit 1; }
 echo "  Copying bin/user/marine_data.py..."
 cp bin/user/marine_data.py ${PACKAGE_DIR}/bin/user/ || { echo "Error: bin/user/marine_data.py not found"; exit 1; }
 
-echo "  Copying marine_data_fields.yaml..."
-cp marine_data_fields.yaml ${PACKAGE_DIR}/ || { echo "Error: marine_data_fields.yaml not found"; exit 1; }
+echo "  Copying bin/user/marine_data_fields.yaml..."
+cp bin/user/marine_data_fields.yaml ${PACKAGE_DIR}/bin/user/ || { echo "Error: bin/user/marine_data_fields.yaml not found"; exit 1; }
 
 # Documentation
 echo "  Copying README.md..."
