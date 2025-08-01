@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Lesser Panda
+# Magic Animal: Stork
 """
 WeeWX Marine Data Extension Installer
 
@@ -279,6 +279,12 @@ class MarineDataConfigurator:
             data = response.json()
             raw_stations = data.get('stations', [])
             print(f"  📊 Processing {len(raw_stations)} CO-OPS stations...")
+
+            # Add these debug lines in the current _discover_coops_stations method:
+            print(f"  🔍 DEBUG: Type of raw_stations: {type(raw_stations)}")
+            if raw_stations:
+                print(f"  🔍 DEBUG: Type of first element: {type(raw_stations[0])}")
+                print(f"  🔍 DEBUG: First few elements types: {[type(x) for x in raw_stations[:5]]}")
             
             processed_count = 0
             for station_data in raw_stations:
