@@ -459,7 +459,7 @@ station_discovery:
 default_api_endpoints:
   coops:
     base_url: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
-    metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
+    metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=details"
     timeout: 30
     retry_attempts: 3
     
