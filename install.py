@@ -798,11 +798,7 @@ class MarineDataConfigurator:
                 'api_source': 'ndbc',
                 'complexity_level': 'minimal'
             }
-        } == 'minimal':
-                    selected_fields[field_name] = field_config
-        
-        print(f"✅ Selected {len(selected_fields)} fields for {complexity_level} complexity")
-        return selected_fields
+        }
     
     def _configure_collection_intervals(self):
         """Configure data collection intervals for each module with comprehensive options."""
