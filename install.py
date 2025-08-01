@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3\
+# Magic Animal: Western Lowland Gorilla
 """
 WeeWX Marine Data Extension Installer
 
@@ -137,50 +138,20 @@ class MarineDataConfigurator:
         self.yaml_data = self._load_yaml_definitions()
         
     def _load_yaml_definitions(self):
-        """Load YAML field definitions (no hardcoding)."""
+        """Load YAML field definitions - REQUIRED, NO fallbacks."""
+        yaml_path = os.path.join(os.path.dirname(__file__), 'marine_data_fields.yaml')
+        
+        if not os.path.exists(yaml_path):
+            print(f"❌ CRITICAL ERROR: marine_data_fields.yaml not found")
+            sys.exit(1)
+            
         try:
-            yaml_path = os.path.join(os.path.dirname(__file__), 'marine_data_fields.yaml')
-            if not os.path.exists(yaml_path):
-                # Try alternative paths
-                for path in ['/usr/share/weewx/user/marine_data_fields.yaml',
-                           '/etc/weewx/bin/user/marine_data_fields.yaml',
-                           './marine_data_fields.yaml']:
-                    if os.path.exists(path):
-                        yaml_path = path
-                        break
-                        
             with open(yaml_path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            print(f"Warning: Could not load YAML definitions: {e}")
-            print("Using fallback minimal configuration...")
-            return self._get_fallback_yaml()
-    
-    def _get_fallback_yaml(self):
-        """Fallback YAML structure when file is missing."""
-        return {
-            'api_modules': {
-                'coops_module': {
-                    'api_url': 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter',
-                    'recommended_interval': 600
-                },
-                'ndbc_module': {
-                    'api_url': 'https://www.ndbc.noaa.gov/data/realtime2',
-                    'recommended_interval': 3600
-                }
-            },
-            'fields': {},
-            'complexity_levels': {
-                'minimal': {'description': 'Essential marine data'},
-                'all': {'description': 'All available marine fields'},
-                'custom': {'description': 'User-selected fields'}
-            },
-            'station_discovery': {
-                'coops': {'metadata_url': 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json'},
-                'ndbc': {'metadata_url': 'https://www.ndbc.noaa.gov/activestations.xml'}
-            }
-        }
-    
+            print(f"❌ CRITICAL ERROR: Cannot load YAML file: {e}")
+            sys.exit(1)
+
     def run_interactive_setup(self):
         """
         Run interactive setup following success manual patterns.
@@ -286,9 +257,12 @@ class MarineDataConfigurator:
         """Discover CO-OPS stations using NOAA API with comprehensive parsing."""
         stations = []
         try:
-            coops_config = self.yaml_data.get('station_discovery', {}).get('coops', {})
-            metadata_url = coops_config.get('metadata_url', 
-                'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json')
+            coops_module = self.yaml_data.get('api_modules', {}).get('coops_module', {})
+            metadata_url = coops_module.get('metadata_url')
+
+            if not metadata_url:
+                print("❌ ERROR: coops_module.metadata_url not found in YAML")
+                return []
             
             print(f"  📡 Querying CO-OPS API: {metadata_url}")
             response = requests.get(metadata_url, timeout=30)
@@ -342,13 +316,9 @@ class MarineDataConfigurator:
             
             print(f"  ✅ Found {processed_count} CO-OPS stations within {max_distance_km}km")
             
-        except requests.RequestException as e:
-            print(f"    ⚠️  CO-OPS station discovery failed: {e}")
-            print(f"    Using fallback CO-OPS stations...")
-            return self._get_fallback_coops_stations(user_lat, user_lon, max_distance_km)
         except Exception as e:
-            print(f"    ⚠️  CO-OPS parsing error: {e}")
-            return self._get_fallback_coops_stations(user_lat, user_lon, max_distance_km)
+            print(f"❌ CO-OPS station discovery failed: {e}")
+            return []
         
         return sorted(stations, key=lambda x: x['distance_km'])
     
@@ -375,12 +345,16 @@ class MarineDataConfigurator:
         return capabilities if capabilities else ['Water Level']  # Default capability
     
     def _discover_ndbc_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover NDBC stations using NOAA data with comprehensive XML parsing."""
+        """Discover NDBC stations using YAML-configured URL."""
         stations = []
         try:
-            ndbc_config = self.yaml_data.get('station_discovery', {}).get('ndbc', {})
-            metadata_url = ndbc_config.get('metadata_url', 
-                'https://www.ndbc.noaa.gov/activestations.xml')
+            # GET URL FROM CONSOLIDATED api_modules SECTION ONLY
+            ndbc_module = self.yaml_data.get('api_modules', {}).get('ndbc_module', {})
+            metadata_url = ndbc_module.get('metadata_url')
+            
+            if not metadata_url:
+                print("❌ ERROR: ndbc_module.metadata_url not found in YAML")
+                return []
             
             print(f"  📡 Querying NDBC API: {metadata_url}")
             response = requests.get(metadata_url, timeout=30)
@@ -438,16 +412,12 @@ class MarineDataConfigurator:
                 print(f"  ✅ Found {processed_count} NDBC stations within {max_distance_km}km")
                 
             except ET.ParseError as e:
-                print(f"    ⚠️  NDBC XML parsing error: {e}")
-                return self._get_fallback_ndbc_stations(user_lat, user_lon, max_distance_km)
+                print(f"❌ NDBC XML parsing error: {e}")
+                return []
                 
-        except requests.RequestException as e:
-            print(f"    ⚠️  NDBC station discovery failed: {e}")
-            print(f"    Using fallback NDBC stations...")
-            return self._get_fallback_ndbc_stations(user_lat, user_lon, max_distance_km)
         except Exception as e:
-            print(f"    ⚠️  NDBC processing error: {e}")
-            return self._get_fallback_ndbc_stations(user_lat, user_lon, max_distance_km)
+            print(f"❌ NDBC station discovery failed: {e}")
+            return []
         
         return sorted(stations, key=lambda x: x['distance_km'])
     
@@ -469,68 +439,7 @@ class MarineDataConfigurator:
         capabilities.extend(['Barometric Pressure', 'Air Temperature'])
         
         return list(set(capabilities))  # Remove duplicates
-    
-    def _get_fallback_coops_stations(self, user_lat, user_lon, max_distance_km):
-        """Fallback CO-OPS stations when discovery fails."""
-        # Predefined stations for major coastal regions
-        fallback_stations = [
-            {'id': '9410230', 'name': 'La Jolla', 'lat': 32.8670, 'lon': -117.2573, 'state': 'CA'},
-            {'id': '9410580', 'name': 'Newport Bay', 'lat': 33.6028, 'lon': -117.8828, 'state': 'CA'},
-            {'id': '9410660', 'name': 'Los Angeles', 'lat': 33.7197, 'lon': -118.2728, 'state': 'CA'},
-            {'id': '9414290', 'name': 'San Francisco', 'lat': 37.8063, 'lon': -122.4659, 'state': 'CA'},
-            {'id': '8518750', 'name': 'The Battery', 'lat': 40.7000, 'lon': -74.0142, 'state': 'NY'},
-            {'id': '8571421', 'name': 'Barbours Cut', 'lat': 29.6678, 'lon': -95.0792, 'state': 'TX'},
-            {'id': '8727520', 'name': 'Cedar Key', 'lat': 29.1358, 'lon': -83.0317, 'state': 'FL'}
-        ]
-        
-        nearby_stations = []
-        for station in fallback_stations:
-            distance = self._calculate_distance(user_lat, user_lon, station['lat'], station['lon'])
-            if distance <= max_distance_km:
-                station_info = station.copy()
-                station_info.update({
-                    'distance_km': distance,
-                    'distance_miles': distance * 0.621371,
-                    'type': 'coops',
-                    'capabilities': ['Water Level', 'Tide Predictions'],
-                    'products': ['WL', 'PR'],
-                    'status': 'active'
-                })
-                nearby_stations.append(station_info)
-        
-        return sorted(nearby_stations, key=lambda x: x['distance_km'])
-    
-    def _get_fallback_ndbc_stations(self, user_lat, user_lon, max_distance_km):
-        """Fallback NDBC stations when discovery fails."""
-        # Predefined buoy stations for major coastal regions
-        fallback_stations = [
-            {'id': '46087', 'name': 'California Coastal', 'lat': 33.223, 'lon': -119.883},
-            {'id': '46025', 'name': 'Santa Monica Bay', 'lat': 33.749, 'lon': -119.053},
-            {'id': '46028', 'name': 'Cape San Martin', 'lat': 35.741, 'lon': -121.884},
-            {'id': '44013', 'name': 'Boston', 'lat': 42.346, 'lon': -70.651},
-            {'id': '44025', 'name': 'Long Island', 'lat': 40.251, 'lon': -73.164},
-            {'id': '42036', 'name': 'West Tampa', 'lat': 28.500, 'lon': -84.517},
-            {'id': '42040', 'name': 'Luke Offshore', 'lat': 29.212, 'lon': -88.207}
-        ]
-        
-        nearby_stations = []
-        for station in fallback_stations:
-            distance = self._calculate_distance(user_lat, user_lon, station['lat'], station['lon'])
-            if distance <= max_distance_km:
-                station_info = station.copy()
-                station_info.update({
-                    'distance_km': distance,
-                    'distance_miles': distance * 0.621371,
-                    'type': 'ndbc',
-                    'station_type': 'buoy',
-                    'capabilities': ['Wind Speed/Direction', 'Wave Height', 'Sea Surface Temperature'],
-                    'products': [],
-                    'owner': 'NOAA'
-                })
-                nearby_stations.append(station_info)
-        
-        return sorted(nearby_stations, key=lambda x: x['distance_km'])
-    
+       
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """Calculate great circle distance between two points in kilometers."""
         # Convert to radians
@@ -989,8 +898,7 @@ class MarineDataConfigurator:
         coops_config = {
             'enable': 'true' if coops_stations else 'false',
             'interval': str(intervals.get('coops_module', 600)),
-            'api_url': self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('api_url', 
-                'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'),
+            'api_url': self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('api_url'),
             'stations': ','.join([s['id'] for s in coops_stations]),
             'products': 'water_level,predictions,water_temperature',  # Default products
             'datum': 'MLLW',  # Mean Lower Low Water
@@ -1005,8 +913,7 @@ class MarineDataConfigurator:
         ndbc_config = {
             'enable': 'true' if ndbc_stations else 'false',
             'interval': str(intervals.get('ndbc_module', 3600)),
-            'api_url': self.yaml_data.get('api_modules', {}).get('ndbc_module', {}).get('api_url',
-                'https://www.ndbc.noaa.gov/data/realtime2'),
+            'api_url': self.yaml_data.get('api_modules', {}).get('ndbc_module', {}).get('api_url'),
             'stations': ','.join([s['id'] for s in ndbc_stations]),
             'data_types': 'stdmet,spec,swdir,swden',  # Standard met, spectral, swell direction, swell density
             'units': 'metric'
