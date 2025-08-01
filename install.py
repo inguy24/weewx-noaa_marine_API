@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Secret Animal: Leopard
 """
 WeeWX Marine Data Extension Installer
 
@@ -12,7 +13,7 @@ Based on extensive testing and proven success patterns:
 - YAML → CONF transformation to exact sample format
 - Comprehensive error handling with graceful degradation
 
-Author: WeeWX Marine Data Extension Team
+Author: Shane Burkhardt
 """
 
 import os
