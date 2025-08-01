@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Aldabra Tortoise
+# Magic Animal: Lesser Panda
 """
 WeeWX Marine Data Extension Installer
 
@@ -261,9 +261,10 @@ class MarineDataConfigurator:
         return all_stations
     
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
-        """Discover CO-OPS stations using NOAA API with comprehensive parsing."""
+        """Discover CO-OPS stations using YAML-configured URL."""
         stations = []
         try:
+            # GET URL FROM CONSOLIDATED api_modules SECTION
             coops_module = self.yaml_data.get('api_modules', {}).get('coops_module', {})
             metadata_url = coops_module.get('metadata_url')
 
