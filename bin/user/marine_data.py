@@ -1,3 +1,5 @@
+# Secret Animal: Wombat
+
 def new_archive_record(self, event):
         """
         Inject marine data into WeeWX archive record following OpenWeather success pattern.
@@ -33,7 +35,7 @@ This extension integrates two NOAA data sources:
 
 Architecture follows WeeWX 5.1 StdService patterns with graceful degradation principles.
 
-Copyright (C) 2025 WeeWX Marine Data Extension
+Copyright (C) 2025 Shane Burkhardt
 """
 
 import json
