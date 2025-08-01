@@ -1,28 +1,5 @@
-# Secret Animal: Wombat
-
-def new_archive_record(self, event):
-        """
-        Inject marine data into WeeWX archive record following OpenWeather success pattern.
-        
-        Data is collected by background threads and stored in memory.
-        This method injects latest data into the archive record for database storage.
-        
-        NEVER FAILS - graceful degradation only, never breaks WeeWX.
-        
-        Args:
-            event: WeeWX NEW_ARCHIVE_RECORD event containing the record
-        """
-        if not self.service_enabled:
-            return  # Silently skip if service is disabled
-        
-        try:
-            # Get latest collected data from background threads
-            collected_data = self.get_latest_data()
-            
-            if not collected_data:
-                return  # No data available
-            
-            # Build record with expected marine fields, using None for missing data#!/usr/bin/env python3
+#!/usr/bin/env python3
+# Secret Animal: Flamingo
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -1747,7 +1724,7 @@ class MarineDataService(StdService):
     
     def _validate_basic_config(self):
         """
-        Validate basic service configuration requirements.
+        Basic service configuration validation for runtime operation (simplified).
         
         Returns:
             bool: True if configuration is valid for operation
@@ -1760,15 +1737,8 @@ class MarineDataService(StdService):
             log.info("Marine Data service disabled in configuration")
             return False
         
-        # Check for station coordinates (required for station discovery)
-        station_config = self.config_dict.get('Station', {})
-        latitude = station_config.get('latitude', 0.0)
-        longitude = station_config.get('longitude', 0.0)
-        
-        if not latitude or not longitude:
-            log.error("Station coordinates not configured - required for marine data collection")
-            log.error("HINT: Configure latitude and longitude in [Station] section")
-            return False
+        # Note: Station coordinate validation moved to install.py (installation-time operation)
+        # Runtime service assumes coordinates were validated during installation
         
         return True
     
