@@ -1,0 +1,6 @@
+WeeWX Marine Data Extension Manifest
+install.py
+bin/user/marine_data.py
+marine_data_fields.yaml
+README.md
+CHANGELOG.md
