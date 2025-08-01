@@ -1,4 +1,26 @@
-#!/usr/bin/env python3
+def new_archive_record(self, event):
+        """
+        Inject marine data into WeeWX archive record following OpenWeather success pattern.
+        
+        Data is collected by background threads and stored in memory.
+        This method injects latest data into the archive record for database storage.
+        
+        NEVER FAILS - graceful degradation only, never breaks WeeWX.
+        
+        Args:
+            event: WeeWX NEW_ARCHIVE_RECORD event containing the record
+        """
+        if not self.service_enabled:
+            return  # Silently skip if service is disabled
+        
+        try:
+            # Get latest collected data from background threads
+            collected_data = self.get_latest_data()
+            
+            if not collected_data:
+                return  # No data available
+            
+            # Build record with expected marine fields, using None for missing data#!/usr/bin/env python3
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -1007,13 +1029,13 @@ class NDBCAPIClient:
             # Create data mapping
             data_dict = dict(zip(headers, latest_data))
             
-            # Extract and validate standard fields
+            # Extract and process standard fields (trust NOAA QC/QA for data ranges)
             processed_data = {
                 'station_id': station_id,
                 'data_type': 'stdmet'
             }
             
-            # Map NDBC fields to our standardized field names with validation
+            # Map NDBC fields to our standardized field names
             field_mappings = {
                 'WVHT': ('wave_height', 'meters'),
                 'DPD': ('wave_period', 'seconds'),
@@ -1034,20 +1056,16 @@ class NDBCAPIClient:
                 if ndbc_field in data_dict:
                     raw_value = data_dict[ndbc_field]
                     
-                    # NDBC uses 'MM' for missing data
-                    if raw_value != 'MM':
+                    # NDBC uses 'MM' for missing data - only validate for null/missing
+                    if raw_value != 'MM' and raw_value is not None:
                         try:
                             numeric_value = float(raw_value)
-                            
-                            # Apply data validation
-                            if self._validate_ndbc_value(our_field, numeric_value):
-                                processed_data[our_field] = numeric_value
-                            else:
-                                log.warning(f"Invalid {our_field} value for {station_id}: {numeric_value}")
-                                processed_data[our_field] = None
+                            processed_data[our_field] = numeric_value
                         except ValueError:
+                            # Invalid numeric format - store as None
                             processed_data[our_field] = None
                     else:
+                        # Missing data
                         processed_data[our_field] = None
             
             # Add timestamp from NDBC data
@@ -1117,9 +1135,14 @@ class NDBCAPIClient:
             for ndbc_field, our_field in ocean_mappings.items():
                 if ndbc_field in data_dict and data_dict[ndbc_field] != 'MM':
                     try:
+                        # Trust NOAA QC/QA - only validate for null/missing data
                         processed_data[our_field] = float(data_dict[ndbc_field])
                     except ValueError:
+                        # Invalid numeric format
                         processed_data[our_field] = None
+                else:
+                    # Missing data
+                    processed_data[our_field] = None
             
             return processed_data if any(v is not None for k, v in processed_data.items() if k != 'station_id' and k != 'data_type') else None
             
@@ -1161,347 +1184,12 @@ class NDBCAPIClient:
             log.error(f"Error processing NDBC spectral data for {station_id}: {e}")
             return None
     
-    def _validate_ndbc_value(self, field_name, value):
-        """
-        Validate NDBC data values for reasonable ranges.
-        
-        Args:
-            field_name (str): Name of the data field
-            value (float): Value to validate
-            
-        Returns:
-            bool: True if value is within reasonable range
-        """
-        validation_ranges = {
-            'wave_height': (0, 30),              # 0-30 meters
-            'wave_period': (1, 30),              # 1-30 seconds
-            'wave_direction': (0, 360),          # 0-360 degrees
-            'wind_speed': (0, 100),              # 0-100 m/s
-            'wind_direction': (0, 360),          # 0-360 degrees
-            'wind_gust': (0, 150),               # 0-150 m/s
-            'air_temperature': (-40, 60),        # -40 to 60°C
-            'sea_surface_temp': (-5, 40),        # -5 to 40°C
-            'barometric_pressure': (900, 1100),  # 900-1100 hPa
-            'visibility': (0, 50),               # 0-50 nautical miles
-            'dewpoint': (-50, 50)                # -50 to 50°C
-        }
-        
-        if field_name in validation_ranges:
-            min_val, max_val = validation_ranges[field_name]
-            return min_val <= value <= max_val
-        
-        return True  # No validation range defined - accept value
+    # _validate_ndbc_value method removed - trusting NOAA QC/QA processes
+    # NOAA is responsible for data quality control, we only check for null/missing values
 
 
-class MarineDatabaseManager:
-    """
-    Manages marine data database operations including two-table architecture.
-    
-    Handles creation and management of both high-frequency CO-OPS data table
-    and lower-frequency marine forecast data table with proper field types.
-    """
-    
-    def __init__(self, config_dict):
-        """
-        Initialize marine database manager.
-        
-        Args:
-            config_dict: WeeWX configuration dictionary for database access
-        """
-        self.config_dict = config_dict
-        self.db_binding = 'wx_binding'  # Standard WeeWX database binding
-        
-        log.info("Marine database manager initialized")
-    
-    def create_marine_tables(self, selected_fields, selected_stations):
-        """
-        Create marine data tables based on selected fields and stations.
-        
-        Args:
-            selected_fields (dict): Selected fields by module
-            selected_stations (dict): Selected stations by type
-            
-        Returns:
-            int: Number of tables created
-        """
-        try:
-            tables_created = 0
-            
-            # Create high-frequency CO-OPS data table if CO-OPS stations selected
-            if selected_stations.get('coops_stations'):
-                if self._create_coops_data_table():
-                    tables_created += 1
-            
-            # Create marine forecast data table if any marine data selected
-            if selected_fields:
-                if self._create_marine_forecast_table():
-                    tables_created += 1
-            
-            log.info(f"Marine database setup complete: {tables_created} tables ready")
-            return tables_created
-            
-        except Exception as e:
-            log.error(f"Marine database table creation failed: {e}")
-            raise Exception(f"Database setup failed: {e}")
-    
-    def _create_coops_data_table(self):
-        """
-        Create high-frequency CO-OPS data table for 6-minute water level updates.
-        
-        Returns:
-            bool: True if table was created or already exists
-        """
-        try:
-            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
-                # Check if table already exists
-                try:
-                    dbmanager.connection.execute("SELECT 1 FROM coops_data LIMIT 1")
-                    log.info("CO-OPS data table already exists")
-                    return True
-                except:
-                    pass  # Table doesn't exist, create it
-                
-                # Determine database type for appropriate SQL
-                db_type = 'sqlite' if 'sqlite' in str(dbmanager.connection).lower() else 'mysql'
-                
-                if db_type == 'sqlite':
-                    create_sql = """
-                    CREATE TABLE coops_data (
-                        dateTime INTEGER NOT NULL,
-                        station_id TEXT NOT NULL,
-                        marine_current_water_level REAL,
-                        marine_water_level_sigma REAL,
-                        marine_water_level_flags TEXT,
-                        marine_coastal_water_temp REAL,
-                        marine_water_temp_flags TEXT,
-                        PRIMARY KEY (dateTime, station_id)
-                    )"""
-                else:
-                    create_sql = """
-                    CREATE TABLE coops_data (
-                        dateTime INTEGER NOT NULL,
-                        station_id VARCHAR(20) NOT NULL,
-                        marine_current_water_level REAL,
-                        marine_water_level_sigma REAL,
-                        marine_water_level_flags VARCHAR(50),
-                        marine_coastal_water_temp REAL,
-                        marine_water_temp_flags VARCHAR(50),
-                        PRIMARY KEY (dateTime, station_id)
-                    )"""
-                
-                dbmanager.connection.execute(create_sql)
-                log.info("Created CO-OPS data table for high-frequency water level data")
-                return True
-                
-        except Exception as e:
-            log.error(f"Failed to create CO-OPS data table: {e}")
-            raise Exception(f"CO-OPS table creation failed: {e}")
-    
-    def _create_marine_forecast_table(self):
-        """
-        Create marine forecast data table for lower-frequency tide predictions and buoy data.
-        
-        Returns:
-            bool: True if table was created or already exists
-        """
-        try:
-            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
-                # Check if table already exists
-                try:
-                    dbmanager.connection.execute("SELECT 1 FROM marine_forecast_data LIMIT 1")
-                    log.info("Marine forecast data table already exists")
-                    return True
-                except:
-                    pass  # Table doesn't exist, create it
-                
-                # Determine database type for appropriate SQL
-                db_type = 'sqlite' if 'sqlite' in str(dbmanager.connection).lower() else 'mysql'
-                
-                if db_type == 'sqlite':
-                    create_sql = """
-                    CREATE TABLE marine_forecast_data (
-                        dateTime INTEGER NOT NULL,
-                        station_id TEXT NOT NULL,
-                        station_type TEXT NOT NULL,
-                        data_type TEXT NOT NULL,
-                        -- Tide Prediction Fields
-                        marine_next_high_time TEXT,
-                        marine_next_high_height REAL,
-                        marine_next_low_time TEXT,
-                        marine_next_low_height REAL,
-                        marine_tide_range REAL,
-                        -- NDBC Buoy Weather Fields
-                        marine_wave_height REAL,
-                        marine_wave_period REAL,
-                        marine_avg_wave_period REAL,
-                        marine_wave_direction REAL,
-                        marine_wind_speed REAL,
-                        marine_wind_direction REAL,
-                        marine_wind_gust REAL,
-                        marine_air_temp REAL,
-                        marine_sea_surface_temp REAL,
-                        marine_barometric_pressure REAL,
-                        marine_visibility REAL,
-                        marine_dewpoint REAL,
-                        PRIMARY KEY (dateTime, station_id, data_type)
-                    )"""
-                else:
-                    create_sql = """
-                    CREATE TABLE marine_forecast_data (
-                        dateTime INTEGER NOT NULL,
-                        station_id VARCHAR(20) NOT NULL,
-                        station_type VARCHAR(20) NOT NULL,
-                        data_type VARCHAR(30) NOT NULL,
-                        -- Tide Prediction Fields
-                        marine_next_high_time VARCHAR(30),
-                        marine_next_high_height REAL,
-                        marine_next_low_time VARCHAR(30),
-                        marine_next_low_height REAL,
-                        marine_tide_range REAL,
-                        -- NDBC Buoy Weather Fields
-                        marine_wave_height REAL,
-                        marine_wave_period REAL,
-                        marine_avg_wave_period REAL,
-                        marine_wave_direction REAL,
-                        marine_wind_speed REAL,
-                        marine_wind_direction REAL,
-                        marine_wind_gust REAL,
-                        marine_air_temp REAL,
-                        marine_sea_surface_temp REAL,
-                        marine_barometric_pressure REAL,
-                        marine_visibility REAL,
-                        marine_dewpoint REAL,
-                        PRIMARY KEY (dateTime, station_id, data_type)
-                    )"""
-                
-                dbmanager.connection.execute(create_sql)
-                log.info("Created marine forecast data table for tide predictions and buoy data")
-                return True
-                
-        except Exception as e:
-            log.error(f"Failed to create marine forecast data table: {e}")
-            raise Exception(f"Marine forecast table creation failed: {e}")
-    
-    def insert_coops_data(self, data_records):
-        """
-        Insert CO-OPS data records into high-frequency table.
-        
-        Args:
-            data_records (list): List of CO-OPS data dictionaries
-            
-        Returns:
-            int: Number of records inserted
-        """
-        if not data_records:
-            return 0
-        
-        try:
-            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
-                inserted = 0
-                
-                for record in data_records:
-                    try:
-                        # Build insert statement
-                        sql = """
-                        INSERT OR REPLACE INTO coops_data 
-                        (dateTime, station_id, marine_current_water_level, marine_water_level_sigma,
-                         marine_water_level_flags, marine_coastal_water_temp, marine_water_temp_flags)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """
-                        
-                        values = (
-                            int(time.time()),  # Current timestamp
-                            record.get('station_id'),
-                            record.get('water_level'),
-                            record.get('sigma'),
-                            record.get('flags', ''),
-                            record.get('water_temperature'),
-                            record.get('water_temp_flags', '')
-                        )
-                        
-                        dbmanager.connection.execute(sql, values)
-                        inserted += 1
-                        
-                    except Exception as e:
-                        log.error(f"Failed to insert CO-OPS record: {e}")
-                        continue
-                
-                log.debug(f"Inserted {inserted} CO-OPS data records")
-                return inserted
-                
-        except Exception as e:
-            log.error(f"CO-OPS data insertion failed: {e}")
-            return 0
-    
-    def insert_marine_forecast_data(self, data_records):
-        """
-        Insert marine forecast data records (tide predictions, buoy data).
-        
-        Args:
-            data_records (list): List of marine forecast data dictionaries
-            
-        Returns:
-            int: Number of records inserted
-        """
-        if not data_records:
-            return 0
-        
-        try:
-            with weewx.manager.open_manager_with_config(self.config_dict, self.db_binding) as dbmanager:
-                inserted = 0
-                
-                for record in data_records:
-                    try:
-                        # Build insert statement with all marine forecast fields
-                        sql = """
-                        INSERT OR REPLACE INTO marine_forecast_data 
-                        (dateTime, station_id, station_type, data_type,
-                         marine_next_high_time, marine_next_high_height,
-                         marine_next_low_time, marine_next_low_height, marine_tide_range,
-                         marine_wave_height, marine_wave_period, marine_avg_wave_period,
-                         marine_wave_direction, marine_wind_speed, marine_wind_direction,
-                         marine_wind_gust, marine_air_temp, marine_sea_surface_temp,
-                         marine_barometric_pressure, marine_visibility, marine_dewpoint)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """
-                        
-                        values = (
-                            int(time.time()),
-                            record.get('station_id'),
-                            record.get('station_type', 'unknown'),
-                            record.get('data_type', 'unknown'),
-                            record.get('next_high_time'),
-                            record.get('next_high_height'),
-                            record.get('next_low_time'),
-                            record.get('next_low_height'),
-                            record.get('tidal_range'),
-                            record.get('wave_height'),
-                            record.get('wave_period'),
-                            record.get('avg_wave_period'),
-                            record.get('wave_direction'),
-                            record.get('wind_speed'),
-                            record.get('wind_direction'),
-                            record.get('wind_gust'),
-                            record.get('air_temperature'),
-                            record.get('sea_surface_temp'),
-                            record.get('barometric_pressure'),
-                            record.get('visibility'),
-                            record.get('dewpoint')
-                        )
-                        
-                        dbmanager.connection.execute(sql, values)
-                        inserted += 1
-                        
-                    except Exception as e:
-                        log.error(f"Failed to insert marine forecast record: {e}")
-                        continue
-                
-                log.debug(f"Inserted {inserted} marine forecast data records")
-                return inserted
-                
-        except Exception as e:
-            log.error(f"Marine forecast data insertion failed: {e}")
-            return 0
+# MarineDatabaseManager class completely removed
+# Database operations moved to install.py following OpenWeather success patterns
 
 
 class MarineFieldManager:
@@ -1664,7 +1352,7 @@ class COOPSBackgroundThread(threading.Thread):
             config_dict=config_dict
         )
         
-        # Thread-safe data storage
+        # Thread-safe data storage (in memory only - following OpenWeather pattern)
         self.data_lock = threading.Lock()
         self.latest_data = {}
         
@@ -1673,9 +1361,6 @@ class COOPSBackgroundThread(threading.Thread):
         
         # Track last collection times per station
         self.last_collection = {station_id: 0 for station_id in selected_stations}
-        
-        # Database manager for direct insertion
-        self.db_manager = MarineDatabaseManager(config_dict)
         
         log.info(f"CO-OPS background thread initialized for {len(selected_stations)} stations")
     
@@ -1731,17 +1416,14 @@ class COOPSBackgroundThread(threading.Thread):
                 else:
                     collected_data.append(water_temp_data)
             
-            # Store in thread-safe manner
-            if collected_data:
-                with self.data_lock:
-                    self.latest_data[station_id] = collected_data
-                
-                # Insert directly into database
-                self.db_manager.insert_coops_data(collected_data)
-                
-                log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
-                if log_success:
-                    log.info(f"Collected CO-OPS data from station {station_id}: {len(collected_data)} records")
+        # Store in thread-safe manner (following OpenWeather pattern)
+        if collected_data:
+            with self.data_lock:
+                self.latest_data[station_id] = collected_data
+            
+            log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
+            if log_success:
+                log.info(f"Collected CO-OPS data from station {station_id}: {len(collected_data)} records")
             
         except MarineDataAPIError as e:
             log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
@@ -1834,9 +1516,6 @@ class MarineBackgroundThread(threading.Thread):
             self.last_collection['ndbc_weather'][station_id] = 0
             self.last_collection['ndbc_ocean'][station_id] = 0
         
-        # Database manager for direct insertion
-        self.db_manager = MarineDatabaseManager(config_dict)
-        
         total_stations = len(selected_stations.get('coops_stations', [])) + len(selected_stations.get('ndbc_stations', []))
         log.info(f"Marine background thread initialized for {total_stations} stations")
     
@@ -1885,14 +1564,11 @@ class MarineBackgroundThread(threading.Thread):
                             'data_type': 'tide_predictions'
                         })
                         
-                        # Store in thread-safe manner
+                        # Store in thread-safe manner (following OpenWeather pattern)
                         with self.data_lock:
                             if station_id not in self.latest_data:
                                 self.latest_data[station_id] = {}
                             self.latest_data[station_id]['tide_predictions'] = tide_data
-                        
-                        # Insert into database
-                        self.db_manager.insert_marine_forecast_data([tide_data])
                         
                         log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
                         if log_success:
@@ -1932,14 +1608,11 @@ class MarineBackgroundThread(threading.Thread):
                             'data_type': 'buoy_weather'
                         })
                         
-                        # Store in thread-safe manner
+                        # Store in thread-safe manner (following OpenWeather pattern)
                         with self.data_lock:
                             if station_id not in self.latest_data:
                                 self.latest_data[station_id] = {}
                             self.latest_data[station_id]['weather'] = weather_data
-                        
-                        # Insert into database
-                        self.db_manager.insert_marine_forecast_data([weather_data])
                         
                         log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
                         if log_success:
@@ -1969,14 +1642,11 @@ class MarineBackgroundThread(threading.Thread):
                             'data_type': 'buoy_ocean'
                         })
                         
-                        # Store in thread-safe manner
+                        # Store in thread-safe manner (following OpenWeather pattern)
                         with self.data_lock:
                             if station_id not in self.latest_data:
                                 self.latest_data[station_id] = {}
                             self.latest_data[station_id]['ocean'] = ocean_data
-                        
-                        # Insert into database
-                        self.db_manager.insert_marine_forecast_data([ocean_data])
                         
                         log.debug(f"Collected NDBC ocean data from station {station_id}")
                     
@@ -2063,7 +1733,7 @@ class MarineDataService(StdService):
             self.service_enabled = False
             return
         
-        # Initialize components
+        # Initialize components (following OpenWeather success pattern)
         self._initialize_data_collection()
         self._setup_unit_system()
         
@@ -2298,7 +1968,10 @@ class MarineDataService(StdService):
     
     def _get_existing_database_fields(self):
         """
-        Get list of existing marine database fields from both tables.
+        Get list of existing marine database fields from archive table.
+        
+        Following OpenWeather pattern - marine fields are added to archive table,
+        not separate tables. Database schema assumed to exist (created by install.py).
         
         Returns:
             list: List of existing marine database field names
@@ -2308,23 +1981,11 @@ class MarineDataService(StdService):
             existing_fields = []
             
             with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
-                # Check CO-OPS data table
-                try:
-                    for column in dbmanager.connection.genSchemaOf('coops_data'):
-                        field_name = column[1]
-                        if field_name.startswith('marine_'):
-                            existing_fields.append(field_name)
-                except:
-                    log.debug("CO-OPS data table does not exist yet")
-                
-                # Check marine forecast data table
-                try:
-                    for column in dbmanager.connection.genSchemaOf('marine_forecast_data'):
-                        field_name = column[1]
-                        if field_name.startswith('marine_'):
-                            existing_fields.append(field_name)
-                except:
-                    log.debug("Marine forecast data table does not exist yet")
+                # Check archive table for marine fields (following OpenWeather pattern)
+                for column in dbmanager.connection.genSchemaOf('archive'):
+                    field_name = column[1]
+                    if field_name.startswith('marine_'):
+                        existing_fields.append(field_name)
             
             return existing_fields
             
@@ -2334,17 +1995,14 @@ class MarineDataService(StdService):
     
     def _initialize_data_collection(self):
         """
-        Initialize data collection components with background threads.
+        Initialize data collection components following OpenWeather success pattern.
+        
+        Database schema is assumed to exist (created by install.py).
+        Only initializes background threads for data collection.
         """
         try:
-            # Initialize field manager
+            # Initialize field manager for configuration reading
             self.field_manager = MarineFieldManager(config_dict=self.config_dict)
-            
-            # Initialize database manager
-            self.db_manager = MarineDatabaseManager(self.config_dict)
-            
-            # Create database tables if needed
-            self.db_manager.create_marine_tables(self.active_fields, self.selected_stations)
             
             # Initialize background threads based on selected station types
             self.background_threads = []
@@ -2454,35 +2112,20 @@ class MarineDataService(StdService):
             # Build record with expected marine fields, using None for missing data
             record_update = {}
             
-            # Get expected database fields
+            # Get expected database fields from configuration (following OpenWeather pattern)
             expected_fields = self.field_manager.get_database_field_mappings(self.active_fields)
             
             fields_injected = 0
             for db_field, field_type in expected_fields.items():
-                # Look for this field in collected data
-                field_value = None
-                
-                # Search through all station data for this field
-                for station_data in collected_data.values():
-                    if isinstance(station_data, dict):
-                        for data_type, data_records in station_data.items():
-                            if isinstance(data_records, dict) and db_field in data_records:
-                                field_value = data_records[db_field]
-                                break
-                            elif isinstance(data_records, list):
-                                for record in data_records:
-                                    if isinstance(record, dict) and db_field in record:
-                                        field_value = record[db_field]
-                                        break
-                        if field_value is not None:
-                            break
+                # Look for this field in collected data from any station
+                field_value = self._find_field_value_in_collected_data(db_field, collected_data)
                 
                 # Inject the field value (None if not found)
                 record_update[db_field] = field_value
                 if field_value is not None:
                     fields_injected += 1
             
-            # Update the archive record
+            # Update the archive record (following OpenWeather pattern)
             event.record.update(record_update)
             
             if fields_injected > 0:
@@ -2494,12 +2137,35 @@ class MarineDataService(StdService):
             log.error(f"Error injecting marine data: {e}")
             # Never re-raise - would break WeeWX
     
+    def _find_field_value_in_collected_data(self, db_field, collected_data):
+        """
+        Find a specific database field value in collected data from all stations.
+        
+        Args:
+            db_field (str): Database field name to find
+            collected_data (dict): All collected data from background threads
+            
+        Returns:
+            Value if found, None otherwise
+        """
+        # Search through all station data for this field
+        for station_data in collected_data.values():
+            if isinstance(station_data, dict):
+                for data_type, data_records in station_data.items():
+                    if isinstance(data_records, dict) and db_field in data_records:
+                        return data_records[db_field]
+                    elif isinstance(data_records, list):
+                        for record in data_records:
+                            if isinstance(record, dict) and db_field in record:
+                                return record[db_field]
+        return None
+    
     def get_latest_data(self):
         """
-        Get latest collected data from all background threads.
+        Get latest collected data from all background threads following OpenWeather pattern.
         
         Returns:
-            dict: Combined latest data from all sources
+            dict: Combined latest data from all sources stored in memory
         """
         try:
             combined_data = {}
@@ -2685,19 +2351,19 @@ class MarineDataTester:
             print("  ❌ No station coordinates found in configuration")
             success = False
         
-        # Check database tables
-        print("Checking database tables...")
+        # Check database tables (following OpenWeather pattern - marine fields in archive table)
+        print("Checking database fields...")
         try:
-            db_tables = self._get_database_tables()
-            marine_tables = [t for t in db_tables if t in ['coops_data', 'marine_forecast_data']]
+            db_fields = self._get_database_fields()
+            marine_fields = [f for f in db_fields if f.startswith('marine_')]
             
-            if marine_tables:
-                print(f"  ✓ Found marine database tables: {', '.join(marine_tables)}")
+            if marine_fields:
+                print(f"  ✓ Found {len(marine_fields)} marine database fields in archive table")
             else:
-                print("  ❌ No marine database tables found")
+                print("  ❌ No marine database fields found in archive table")
                 success = False
         except Exception as e:
-            print(f"  ❌ Error checking database tables: {e}")
+            print(f"  ❌ Error checking database fields: {e}")
             success = False
         
         return success
@@ -2819,12 +2485,12 @@ class MarineDataTester:
         
         return success
     
-    def _get_database_tables(self):
+    def _get_database_fields(self):
         """
-        Get list of database tables.
+        Get list of database fields from archive table (following OpenWeather pattern).
         
         Returns:
-            list: List of table names
+            list: List of field names in archive table
         """
         if not self.config_dict:
             return []
@@ -2832,24 +2498,12 @@ class MarineDataTester:
         try:
             db_binding = 'wx_binding'
             with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
-                tables = []
-                
-                # Get table list (method varies by database type)
-                if 'sqlite' in str(dbmanager.connection).lower():
-                    # SQLite
-                    cursor = dbmanager.connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    )
-                    tables = [row[0] for row in cursor.fetchall()]
-                else:
-                    # MySQL
-                    cursor = dbmanager.connection.execute("SHOW TABLES")
-                    tables = [row[0] for row in cursor.fetchall()]
-                
-                return tables
-                
+                fields = []
+                for column in dbmanager.connection.genSchemaOf('archive'):
+                    fields.append(column[1])
+                return fields
         except Exception as e:
-            raise Exception(f"Database table access failed: {e}")
+            raise Exception(f"Database field access failed: {e}")
     
     def run_basic_tests(self):
         """
