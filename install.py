@@ -59,7 +59,7 @@ class MarineDataInstaller(ExtensionInstaller):
             author_email="info@example.com",
             files=[
                 ('bin/user', ['bin/user/marine_data.py']),
-                ('bin/user', ['bin/user/marine_data_fields.yaml'])
+                ('', ['bin/user/marine_data_fields.yaml'])
             ],
             config={
                 'MarineDataService': {
