@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Black Widow
+# Magic Animal: Brown Recluse
 """
 WeeWX Marine Data Extension Installer
 
@@ -1384,6 +1384,145 @@ class MarineDataConfigurator:
             }
         }
 
+    def show_custom_selection(self, field_definitions):
+        """Show flat field selection interface for new YAML structure."""
+        import curses
+        
+        def curses_main(stdscr):
+            # Initialize curses
+            curses.curs_set(0)  # Hide cursor
+            curses.use_default_colors()
+            if curses.has_colors():
+                curses.start_color()
+                curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight
+                curses.init_pair(2, curses.COLOR_GREEN, -1)  # Selected
+                curses.init_pair(3, curses.COLOR_BLUE, -1)   # Header
+            
+            # Build field list directly from YAML - no hardcoded categorization
+            all_fields = []
+            for field_name, field_info in field_definitions.items():
+                all_fields.append({
+                    'type': 'field',
+                    'name': field_name,
+                    'display': field_info['display_name'],
+                    'selected': False
+                })
+            
+            # Sort alphabetically by display name for consistent presentation
+            all_fields.sort(key=lambda x: x['display'])
+            
+            # State variables
+            current_item = 0
+            scroll_offset = 0
+            
+            def draw_interface():
+                stdscr.clear()
+                height, width = stdscr.getmaxyx()
+                
+                # Title
+                title = "CUSTOM FIELD SELECTION - Select All Desired Fields"
+                stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+                
+                # Instructions
+                instructions = "↑↓:Navigate  SPACE:Toggle  ENTER:Confirm  q:Quit"
+                stdscr.addstr(2, (width - len(instructions)) // 2, instructions)
+                
+                # Field list
+                start_row = 4
+                visible_rows = height - start_row - 3
+                
+                # Adjust scroll offset
+                if current_item < scroll_offset:
+                    scroll_offset = current_item
+                elif current_item >= scroll_offset + visible_rows:
+                    scroll_offset = current_item - visible_rows + 1
+                
+                # Display fields
+                for i in range(visible_rows):
+                    field_idx = scroll_offset + i
+                    if field_idx >= len(all_fields):
+                        break
+                    
+                    field = all_fields[field_idx]
+                    y = start_row + i
+                    
+                    # Selection indicator
+                    mark = "[X]" if field['selected'] else "[ ]"
+                    
+                    # Format line
+                    line = f"{mark} {field['display']}"
+                    
+                    # Highlight current item
+                    attr = curses.A_REVERSE if field_idx == current_item else curses.A_NORMAL
+                    if field['selected']:
+                        attr |= curses.color_pair(2)
+                    
+                    try:
+                        stdscr.addstr(y, 0, line[:width-1], attr)
+                    except curses.error:
+                        pass
+                
+                # Summary at bottom
+                selected_count = sum(1 for f in all_fields if f['selected'])
+                total_fields = len(all_fields)
+                summary = f"Selected: {selected_count}/{total_fields} fields"
+                stdscr.addstr(height-2, (width - len(summary)) // 2, summary, curses.color_pair(3))
+                
+                stdscr.refresh()
+            
+            # Main interaction loop
+            while True:
+                draw_interface()
+                key = stdscr.getch()
+                
+                if key == ord('q') or key == 27:  # ESC or 'q'
+                    return None
+                elif key == curses.KEY_UP and current_item > 0:
+                    current_item -= 1
+                elif key == curses.KEY_DOWN and current_item < len(all_fields) - 1:
+                    current_item += 1
+                elif key == ord(' '):  # Space to toggle selection
+                    all_fields[current_item]['selected'] = not all_fields[current_item]['selected']
+                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
+                    # Return flat field selection
+                    result = {}
+                    for field in all_fields:
+                        if field['selected']:
+                            result[field['name']] = True
+                    return result
+        
+        # REMOVED: broad except Exception catch to see what's failing
+        result = curses.wrapper(curses_main)
+        
+        if result is None:
+            print("\nCustom selection cancelled.")
+            return None
+        
+        # Show final summary
+        selected_count = len(result)
+        print(f"\n" + "="*60)
+        print(f"SELECTION SUMMARY: {selected_count} fields selected")
+        print("="*60)
+        
+        if selected_count == 0:
+            print("Warning: No fields selected. Using 'minimal' defaults instead.")
+            return None
+        
+        # Show selected field names
+        if result:
+            selected_names = []
+            for field_name in result.keys():
+                if field_name in field_definitions:
+                    selected_names.append(field_definitions[field_name]['display_name'])
+            
+            if selected_names:
+                print("Selected fields:")
+                for i, name in enumerate(selected_names[:5]):  # Show first 5
+                    print(f"  - {name}")
+                if len(selected_names) > 5:
+                    print(f"  ... and {len(selected_names) - 5} more")
+        
+        return result
 
 class MarineDatabaseManager:
     """
