@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Cicada
+# Magic Animal: Black Widow
 """
 WeeWX Marine Data Extension Installer
 
@@ -1459,83 +1459,47 @@ class MarineDatabaseManager:
         except Exception as e:
             print(f"    ⚠️  Warning: Could not create table '{table_name}': {e}")
     
-    def _add_missing_fields(self, missing_fields, field_mappings):
-        """
-        Add missing database fields using hybrid approach from success manual.
+    def _add_missing_fields(self, fields):
+        """Add missing database fields using hybrid approach from success manual."""
+        print("  🔧 Adding missing database fields...")
         
-        Uses weectl for REAL/INTEGER types (confirmed supported)
-        Uses direct SQL for VARCHAR/TEXT types (weectl limitation workaround)
-        
-        Args:
-            missing_fields: Set of field names that need to be created
-            field_mappings: Dict mapping field names to their database types
-            
-        Returns:
-            int: Number of fields successfully created
-            
-        Fails fast on any real errors to prevent corrupted installations.
-        """
-        weectl_path = self._find_weectl()
-        config_path = getattr(self.config_dict, 'filename', '/etc/weewx/weewx.conf')
-        created_count = 0
-        
-        for field_name in sorted(missing_fields):
-            field_type = field_mappings[field_name]
-            
-            print(f"    Adding field '{field_name}' ({field_type})...")
-            
-            # Use weectl for numeric types (confirmed supported by success manual)
-            if field_type in ['REAL', 'INTEGER', 'real', 'integer', 'int']:
-                if not weectl_path:
-                    print(f"    ⚠️  weectl not found - using direct SQL for {field_name}")
-                    self._add_field_direct_sql(field_name, field_type)
-                    created_count += 1
-                    continue
-                
-                # CRITICAL: Use correct format from success manual
-                cmd = [weectl_path, 'database', 'add-column', field_name, 
-                    f'--config={config_path}', '-y']
-                cmd.insert(-2, f'--type={field_type}')  # Insert --type=REAL before -y
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                
-                if result.returncode == 0:
-                    print(f"    ✅ Successfully added '{field_name}' using weectl")
-                    created_count += 1
-                elif 'duplicate column' in result.stderr.lower():
-                    print(f"    ✅ Field '{field_name}' already exists")
-                    created_count += 1
-                else:
-                    print(f"    ⚠️  weectl warning for {field_name}: {result.stderr.strip()}")
-                    # Try direct SQL as fallback
-                    try:
-                        self._add_field_direct_sql(field_name, field_type)
-                        created_count += 1
-                    except Exception:
-                        pass  # Ignore fallback failures
-            
-            else:
-                # Use direct SQL for VARCHAR/TEXT types (success manual pattern)
-                self._add_field_direct_sql(field_name, field_type)
-                created_count += 1
-        
-        return created_count
-    
-    def _create_fields_with_weectl(self, fields):
-        """Create numeric fields using weectl (success manual hybrid approach)."""
         try:
-            config_path = '/etc/weewx/weewx.conf'
+            # Try weectl for numeric types first
+            self._create_fields_with_weectl(fields)
+            
+            # Use direct SQL for text types (weectl limitation)
+            self._create_fields_with_sql(fields)
+            
+        except Exception as e:
+            print(f"    ❌ Database field creation failed: {e}")
+            print(f"    💡 Manual commands needed - see weectl database add-column help")
+            raise
+
+    def _create_fields_with_weectl(self, fields):
+        """Create REAL/INTEGER fields using weectl (success manual pattern)."""
+        print("    📊 Creating numeric fields with weectl...")
+        
+        # Find weectl path
+        weectl_path = self._find_weectl_path()
+        if not weectl_path:
+            print("    ⚠️  weectl not found - skipping weectl field creation")
+            return
+        
+        try:
+            config_path = getattr(self.config_dict, 'filename', '/etc/weewx/weewx.conf')
             
             for field_name, field_config in fields.items():
                 db_field = field_config.get('database_field', field_name)
                 db_type = field_config.get('database_type', 'REAL')
                 
-                # CRITICAL: Use equals format for weectl parameters (success manual)
-                cmd = [
-                    'weectl', 'database', 'add-column',
-                    f'--config={config_path}',  # Equals format required
-                    db_field, db_type
-                ]
+                # Only use weectl for REAL/INTEGER types
+                if db_type not in ['REAL', 'INTEGER']:
+                    continue
+                
+                # CRITICAL: Use correct format from success manual
+                cmd = [weectl_path, 'database', 'add-column', db_field, 
+                    f'--config={config_path}', '-y']
+                cmd.insert(-2, f'--type={db_type}')  # ✅ CORRECT: --type=REAL format
                 
                 try:
                     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -1553,53 +1517,40 @@ class MarineDatabaseManager:
                     
         except Exception as e:
             print(f"    ⚠️  weectl field creation failed: {e}")
-    
+   
     def _create_fields_with_sql(self, fields):
         """Create TEXT/VARCHAR fields using direct SQL (success manual hybrid approach)."""
+        print("    📝 Creating text fields with direct SQL...")
+        
         try:
-            # Get database path
-            db_binding = self.config_dict.get('DataBindings', {}).get('wx_binding', {})
-            database_dict = self.config_dict.get('Databases', {}).get(db_binding.get('database'), {})
-            db_path = database_dict.get('database_name', '/var/lib/weewx/weewx.sdb')
+            db_binding = 'wx_binding'
             
-            print(f"    📂 Using database: {db_path}")
-            
-            with sqlite3.connect(db_path) as conn:
-                for field_name, field_config in fields.items():
-                    db_field = field_config.get('database_field', field_name)
-                    db_type = field_config.get('database_type', 'VARCHAR(50)')
-                    table_name = field_config.get('database_table', 'archive')
+            for field_name, field_config in fields.items():
+                db_field = field_config.get('database_field', field_name)
+                db_type = field_config.get('database_type', 'REAL')
+                
+                # Only use SQL for non-numeric types
+                if db_type in ['REAL', 'INTEGER']:
+                    continue
+                
+                with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
+                    # Convert MySQL-specific types for SQLite compatibility
+                    if db_type.startswith('VARCHAR'):
+                        sql_type = 'TEXT' if 'sqlite' in str(dbmanager.connection).lower() else db_type
+                    else:
+                        sql_type = db_type
                     
-                    try:
-                        # Check if field exists
-                        cursor = conn.execute(f"PRAGMA table_info({table_name})")
-                        existing_fields = [row[1] for row in cursor.fetchall()]
-                        
-                        if db_field not in existing_fields:
-                            # Add field using direct SQL
-                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {db_field} {db_type}"
-                            conn.execute(alter_sql)
-                            print(f"    ✅ Added field: {db_field} ({db_type}) to {table_name}")
-                        else:
-                            print(f"    ✅ Field exists: {db_field} ({db_type}) in {table_name}")
-                            
-                    except sqlite3.Error as e:
-                        if "duplicate column name" in str(e).lower():
-                            print(f"    ✅ Field exists: {db_field} ({db_type}) in {table_name}")
-                        else:
-                            print(f"    ⚠️  SQL error for field {db_field}: {e}")
-                
-                conn.commit()
-                print(f"    ✅ SQL field creation completed")
-                
-        except sqlite3.Error as e:
-            print(f"    ❌ Database connection error: {e}")
-            print(f"    Attempting alternative database paths...")
-            self._try_alternative_database_paths(fields)
+                    sql = f"ALTER TABLE archive ADD COLUMN {db_field} {sql_type}"
+                    dbmanager.connection.execute(sql)
+                    print(f"    ✅ Added field: {db_field} ({sql_type})")
+                    
         except Exception as e:
-            print(f"    ❌ Direct SQL field creation failed: {e}")
-            print(f"    Fallback: Fields will be created when service starts")
-    
+            error_msg = str(e).lower()
+            if 'duplicate column' in error_msg or 'already exists' in error_msg:
+                print(f"    ✅ Field already exists")
+            else:
+                print(f"    ❌ Direct SQL field creation failed: {e}")
+   
     def _try_alternative_database_paths(self, fields):
         """Try alternative database paths when primary path fails."""
         alternative_paths = [
@@ -1643,6 +1594,26 @@ class MarineDatabaseManager:
         
         print(f"    ⚠️  Could not connect to any database - fields will be created at runtime")
 
+    def _find_weectl_path(self):
+        """Find weectl executable path."""
+        weectl_candidates = [
+            '/usr/bin/weectl',
+            '/usr/local/bin/weectl', 
+            'weectl'  # Try PATH
+        ]
+        
+        for candidate in weectl_candidates:
+            try:
+                result = subprocess.run([candidate, '--version'], 
+                                    capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    print(f"  Found weectl: {candidate}")
+                    return candidate
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+        
+        print("  Warning: weectl not found - will use direct SQL for all fields")
+        return None
 
 if __name__ == '__main__':
     print("This is a WeeWX extension installer.")
