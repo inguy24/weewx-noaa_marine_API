@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Sloth Bear
+# Magic Animal: Brown Bear
 """
 WeeWX Marine Data Extension Installer
 
@@ -264,26 +264,21 @@ class MarineDataConfigurator:
         return all_stations
     
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
-        """
-        Discover CO-OPS stations with enhanced filtering and Newport Beach Harbor fix.
-        
-        FIXES:
-        - Ensures Newport Beach Harbor (9410580) is included in results
-        - Adds bearing calculations to station data
-        - Improves station filtering and sorting
-        - Better error handling for missing stations
-        """
+        """Discover CO-OPS stations using YAML-configured URL - NO FALLBACKS."""
         nearby_stations = []
         
         try:
-            # Get API URL from YAML or use default
-            api_url = self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('api_url')
-            if not api_url:
-                api_url = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail"
+            # USE api_modules SECTION - NOT station_discovery
+            coops_module = self.yaml_data.get('api_modules', {}).get('coops_module', {})
+            metadata_url = coops_module.get('metadata_url')
             
-            print(f"  📡 Querying CO-OPS API: {api_url}")
+            # FAIL FAST IF NO URL - NO FALLBACKS
+            if not metadata_url:
+                print("  ❌ ERROR: coops_module.metadata_url not found in YAML")
+                return []
             
-            response = requests.get(api_url, timeout=30)
+            print(f"  📡 Querying CO-OPS API: {metadata_url}")
+            response = requests.get(metadata_url, timeout=30)
             response.raise_for_status()
             data = response.json()
             
@@ -294,14 +289,14 @@ class MarineDataConfigurator:
             stations = data['stations']
             print(f"  📊 Processing {len(stations)} CO-OPS stations...")
             
-            # Special handling for Newport Beach Harbor to ensure it's included
+            # Newport Beach Harbor tracking
             newport_beach_found = False
             
             for station in stations:
                 try:
                     station_id = station.get('id', '')
                     lat = float(station.get('lat', 0))
-                    lon = float(station.get('lng', 0))  # CO-OPS uses 'lng' not 'lon'
+                    lon = float(station.get('lng', 0))  # CO-OPS uses 'lng'
                     name = station.get('name', 'Unknown Station')
                     state = station.get('state', 'Unknown')
                     
@@ -310,19 +305,16 @@ class MarineDataConfigurator:
                     bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
                     bearing_text = self._bearing_to_text(bearing_deg)
                     
-                    # Check if this is Newport Beach Harbor
+                    # Check for Newport Beach Harbor
                     if station_id == '9410580':
                         newport_beach_found = True
                         print(f"  ✅ Found Newport Beach Harbor: {distance_km:.1f}km {bearing_text}")
                     
-                    # Apply distance filter with some tolerance for important stations like Newport Beach
+                    # Apply distance filter (include Newport Beach even if outside range)
                     if distance_km <= max_distance_km or station_id == '9410580':
-                        # Determine capabilities
-                        capabilities = ['Water Level', 'Tide Predictions']  # Default capabilities
-                        if 'sensors' in station and station['sensors']:
-                            sensors = station['sensors']
-                            if any('waterTemps' in str(sensor) for sensor in sensors):
-                                capabilities.append('Water Temperature')
+                        capabilities = ['Water Level', 'Tide Predictions']
+                        if station.get('tidal', False):
+                            capabilities.append('Tidal Data')
                         
                         station_info = {
                             'id': station_id,
@@ -338,27 +330,19 @@ class MarineDataConfigurator:
                         }
                         nearby_stations.append(station_info)
                         
-                except (ValueError, KeyError, TypeError) as e:
-                    # Skip invalid stations
-                    continue
+                except (ValueError, KeyError, TypeError):
+                    continue  # Skip invalid stations
             
-            # Warning if Newport Beach Harbor not found
             if not newport_beach_found:
                 print(f"  ⚠️  Newport Beach Harbor (9410580) not found in API response")
-                print(f"      This may indicate API changes or station status issues")
             
-            # Sort by distance
+            # Sort by distance and limit to 10
             nearby_stations.sort(key=lambda x: x['distance_km'])
-            
-            # Limit to 10 closest with special handling for important local stations
             result_stations = nearby_stations[:10]
             
             print(f"  ✅ Found {len(result_stations)} CO-OPS stations (limited to 10 closest)")
             return result_stations
             
-        except requests.RequestException as e:
-            print(f"  ❌ CO-OPS API request failed: {e}")
-            return []
         except Exception as e:
             print(f"  ❌ CO-OPS station discovery failed: {e}")
             return []
@@ -409,33 +393,27 @@ class MarineDataConfigurator:
         return capabilities if capabilities else ['Water Level']
     
     def _discover_ndbc_stations(self, user_lat, user_lon, max_distance_km):
-        """
-        Discover NDBC stations with bearing calculations and improved formatting.
-        
-        FIXES:
-        - Adds bearing calculations to station data
-        - Improves station name handling
-        - Better error handling and logging
-        - Enhanced station filtering
-        """
+        """Discover NDBC stations using YAML-configured URL - NO FALLBACKS."""
         nearby_stations = []
         
         try:
-            # Get API URL from YAML or use default
-            api_url = self.yaml_data.get('api_modules', {}).get('ndbc_module', {}).get('api_url')
-            if not api_url:
-                api_url = "https://www.ndbc.noaa.gov/activestations.xml"
+            # USE api_modules SECTION - NOT station_discovery
+            ndbc_module = self.yaml_data.get('api_modules', {}).get('ndbc_module', {})
+            metadata_url = ndbc_module.get('metadata_url')
             
-            print(f"  📡 Querying NDBC API: {api_url}")
+            # FAIL FAST IF NO URL - NO FALLBACKS
+            if not metadata_url:
+                print("  ❌ ERROR: ndbc_module.metadata_url not found in YAML")
+                return []
             
-            response = requests.get(api_url, timeout=30)
+            print(f"  📡 Querying NDBC API: {metadata_url}")
+            response = requests.get(metadata_url, timeout=30)
             response.raise_for_status()
             
             # Parse XML response
             import xml.etree.ElementTree as ET
             root = ET.fromstring(response.content)
             
-            station_count = 0
             print(f"  📊 Processing NDBC XML stations...")
             
             for station in root.findall('.//station'):
@@ -447,8 +425,6 @@ class MarineDataConfigurator:
                     
                     if not station_id or not name:
                         continue
-                        
-                    station_count += 1
                     
                     # Calculate distance and bearing
                     distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
@@ -457,10 +433,9 @@ class MarineDataConfigurator:
                     
                     # Apply distance filter
                     if distance_km <= max_distance_km:
-                        # Default capabilities for NDBC stations
                         capabilities = ['Wave Height', 'Air Temperature', 'Barometric Pressure']
                         
-                        # Enhanced name formatting
+                        # Clean up name
                         if not name or name == station_id:
                             name = f"NDBC Station {station_id}"
                         
@@ -478,20 +453,16 @@ class MarineDataConfigurator:
                         }
                         nearby_stations.append(station_info)
                         
-                except (ValueError, TypeError) as e:
-                    # Skip invalid stations
-                    continue
+                except (ValueError, TypeError):
+                    continue  # Skip invalid stations
             
-            # Sort by distance and limit results
+            # Sort by distance and limit to 10
             nearby_stations.sort(key=lambda x: x['distance_km'])
             result_stations = nearby_stations[:10]
             
             print(f"  ✅ Found {len(result_stations)} NDBC stations (limited to 10 closest)")
             return result_stations
             
-        except requests.RequestException as e:
-            print(f"  ❌ NDBC API request failed: {e}")
-            return []
         except Exception as e:
             print(f"  ❌ NDBC station discovery failed: {e}")
             return []
@@ -537,18 +508,9 @@ class MarineDataConfigurator:
         return earth_radius * c
     
     def _display_station_selection(self, stations):
-        """
-        Display stations with separate COOP/NDBC sections, bearing info, and improved formatting.
-        
-        FIXES:
-        - Separates COOP and NDBC stations into distinct sections
-        - Adds bearing/direction calculations from user location
-        - Improves column formatting and readability
-        - Shows full station names without truncation
-        """
+        """Display stations with separate COOP/NDBC sections and bearing info."""
         if not stations:
             print("⚠️  No marine stations found within search radius.")
-            print("Consider expanding search radius or check your location coordinates.")
             return []
 
         # Separate stations by type
@@ -566,19 +528,19 @@ class MarineDataConfigurator:
             print(f"{'#':<3} {'Station ID':<12} {'Distance':<12} {'Bearing':<10} {'Station Name':<40}")
             print("-"*100)
             
-            for i, station in enumerate(coops_stations[:10], 1):  # Limit to 10 per type
+            for i, station in enumerate(coops_stations[:10], 1):
                 distance_str = f"{station['distance_km']:.1f}km"
                 bearing_str = station.get('bearing_text', 'Unknown')
-                name = station['name'][:39]  # Allow longer names
+                name = station['name'][:39]
                 capabilities = ', '.join(station.get('capabilities', ['Water Level'])[:3])
                 
                 print(f"{i:<3} {station['id']:<12} {distance_str:<12} {bearing_str:<10} {name:<40}")
                 print(f"    {'Capabilities:':<12} {capabilities}")
-                print()  # Blank line for readability
+                print()
         
         # Display NDBC stations section  
         if ndbc_stations:
-            coops_count = len(coops_stations[:10])  # For numbering continuation
+            coops_count = len(coops_stations[:10])
             print(f"\n🛟 NOAA BUOY STATIONS (NDBC) - {len(ndbc_stations)} found")
             print("-"*100)
             print(f"{'#':<3} {'Station ID':<12} {'Distance':<12} {'Bearing':<10} {'Station Name':<40}")
@@ -592,10 +554,9 @@ class MarineDataConfigurator:
                 
                 print(f"{i:<3} {station['id']:<12} {distance_str:<12} {bearing_str:<10} {name:<40}")
                 print(f"    {'Capabilities:':<12} {capabilities}")
-                print()  # Blank line for readability
+                print()
 
         # Enhanced selection options
-        total_display = min(10, len(coops_stations)) + min(10, len(ndbc_stations))
         print(f"\n📍 Station Details Available:")
         print(f"  • CO-OPS Stations: https://tidesandcurrents.noaa.gov/stations.html")
         print(f"  • NDBC Buoys: https://www.ndbc.noaa.gov/")
@@ -608,8 +569,9 @@ class MarineDataConfigurator:
         print(f"  • Enter 'top5' to select 5 closest stations")
         print(f"  • Press Enter to skip station selection")
         
-        # Enhanced selection processing
+        # Selection processing
         all_display_stations = coops_stations[:10] + ndbc_stations[:10]
+        total_display = len(all_display_stations)
         
         while True:
             try:
@@ -618,27 +580,22 @@ class MarineDataConfigurator:
                 if not selection:
                     print("⚠️  No stations selected - marine data collection will be disabled")
                     return []
-                
                 elif selection.lower() == 'all':
                     selected_stations = all_display_stations
                     print(f"✅ Selected all {len(selected_stations)} displayed stations")
                     break
-                    
                 elif selection.lower() == 'coops':
                     selected_stations = coops_stations[:10]
                     print(f"✅ Selected all {len(selected_stations)} CO-OPS stations")
                     break
-                    
                 elif selection.lower() == 'ndbc':
                     selected_stations = ndbc_stations[:10]
                     print(f"✅ Selected all {len(selected_stations)} NDBC stations")
                     break
-                
                 elif selection.lower() == 'top5':
                     selected_stations = all_display_stations[:5]
                     print(f"✅ Selected {len(selected_stations)} closest stations")
                     break
-                
                 else:
                     # Parse individual station numbers
                     try:
@@ -671,17 +628,11 @@ class MarineDataConfigurator:
                 print("\n\n⚠️  Setup cancelled by user.")
                 sys.exit(1)
 
-        # Provide detailed information about selected stations
         self._display_selected_station_details(selected_stations)
         return selected_stations
 
     def _calculate_bearing(self, lat1, lon1, lat2, lon2):
-        """
-        Calculate bearing (compass direction) from point 1 to point 2.
-        
-        Returns bearing in degrees (0-360) where 0° = North, 90° = East, etc.
-        Used to show direction of marine stations from user location.
-        """
+        """Calculate bearing (compass direction) from point 1 to point 2."""
         # Convert to radians
         lat1_rad = math.radians(lat1)
         lon1_rad = math.radians(lon1) 
@@ -704,15 +655,7 @@ class MarineDataConfigurator:
         return bearing_deg
 
     def _bearing_to_text(self, bearing_degrees):
-        """
-        Convert bearing degrees to compass direction text.
-        
-        Args:
-            bearing_degrees: Bearing in degrees (0-360)
-            
-        Returns:
-            str: Compass direction (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW)
-        """
+        """Convert bearing degrees to compass direction text."""
         directions = [
             "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
             "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
@@ -723,15 +666,7 @@ class MarineDataConfigurator:
         return directions[direction_index]
 
     def _display_selected_station_details(self, selected_stations):
-        """
-        Display enhanced details about selected stations with bearing information.
-        
-        IMPROVEMENTS:
-        - Shows bearing/direction for each station
-        - Separates COOP and NDBC stations in summary
-        - Enhanced formatting and readability
-        - More detailed capability information
-        """
+        """Display enhanced details about selected stations with bearing information."""
         if not selected_stations:
             return
         
@@ -765,10 +700,10 @@ class MarineDataConfigurator:
         
         print(f"\n💡 DATA COLLECTION SUMMARY:")
         print(f"  • Total stations selected: {len(selected_stations)}")
-        print(f"  • CO-OPS data: Updated every 10 minutes (high frequency)")
-        print(f"  • NDBC data: Updated hourly (standard meteorological)")
+        print(f"  • CO-OPS data: Updated every 10 minutes")
+        print(f"  • NDBC data: Updated hourly")
         print(f"  • Estimated daily API calls: {len(selected_stations) * 50}-{len(selected_stations) * 100}")
-    
+  
     def _collect_field_selections(self):
         """Collect field selections based on YAML complexity levels."""
         complexity_levels = self.yaml_data.get('complexity_levels', {})
