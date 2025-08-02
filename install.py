@@ -620,45 +620,53 @@ class MarineDataConfigurator:
                 
                 # Header
                 header = f"{icon} {title} - Select Stations"
-                stdscr.addstr(0, 0, header[:width-1], curses.A_BOLD)
-                stdscr.addstr(1, 0, "="*min(len(header), width-1))
+                try:
+                    stdscr.addstr(0, 0, header[:width-1], curses.A_BOLD)
+                    stdscr.addstr(1, 0, "="*min(len(header), width-1))
+                except curses.error:
+                    pass
                 
                 # Explanation section
                 exp_start = 3
                 for i, line in enumerate(explanation):
-                    if exp_start + i < height - 12:  # Leave more room for stations
-                        stdscr.addstr(exp_start + i, 0, line[:width-1], curses.A_DIM)
+                    if exp_start + i < height - 12:
+                        try:
+                            stdscr.addstr(exp_start + i, 0, line[:width-1], curses.A_DIM)
+                        except curses.error:
+                            pass
                 
                 # Instructions
                 inst_row = exp_start + len(explanation) + 1
-                stdscr.addstr(inst_row, 0, "SPACE: Toggle selection  |  ENTER: Confirm  |  ESC: Skip  |  q: Quit")
-                stdscr.addstr(inst_row + 1, 0, "-" * min(70, width-1))
+                try:
+                    stdscr.addstr(inst_row, 0, "SPACE: Toggle selection  |  ENTER: Confirm  |  ESC: Skip  |  q: Quit"[:width-1])
+                    stdscr.addstr(inst_row + 1, 0, "-" * min(70, width-1))
+                except curses.error:
+                    pass
                 
                 # Station list
                 start_row = inst_row + 3
-                # Account for 2-line format per station
-                max_stations = min(6, (height - start_row - 3) // 2)
-                display_stations = stations[:max_stations]
+                max_stations = min(6, max(1, (height - start_row - 3) // 2))
+                display_stations = stations[:max_stations] if stations else []
                 
                 for idx, station in enumerate(display_stations):
-                    y = start_row + (idx * 2)  # Use 2 lines per station
+                    y = start_row + (idx * 2)
                     if y >= height - 3:
                         break
                     
-                    # Format station line with proper width calculation
+                    # Format station line
                     mark = "[X]" if idx in marked else "[ ]"
-                    distance = f"{station['distance_km']:.1f}km"
+                    distance = f"{station.get('distance_km', 0):.1f}km"
                     bearing = station.get('bearing_text', 'Unknown')
                     
                     # Calculate available width for name
-                    prefix = f"{mark} {station['id']} - "
+                    prefix = f"{mark} {station.get('id', 'Unknown')} - "
                     suffix = f" ({distance} {bearing})"
                     available_width = width - len(prefix) - len(suffix) - 2
                     
-                    # Truncate name properly to fit
-                    name = station['name']
-                    if len(name) > available_width:
-                        name = name[:available_width-3] + "..."
+                    # Truncate name properly
+                    name = station.get('name', 'Unknown Station')
+                    if available_width > 0 and len(name) > available_width:
+                        name = name[:max(1, available_width-3)] + "..."
                     
                     line = f"{prefix}{name}{suffix}"
                     
@@ -667,7 +675,7 @@ class MarineDataConfigurator:
                     try:
                         stdscr.addstr(y, 0, line[:width-1], attr)
                     except curses.error:
-                        pass  # Skip if can't fit
+                        pass
                     
                     # Show capabilities on next line
                     caps = ', '.join(station.get('capabilities', [])[:2])
@@ -678,7 +686,7 @@ class MarineDataConfigurator:
                         except curses.error:
                             pass
                 
-                # Footer with selection count
+                # Footer
                 footer_y = height - 2
                 footer = f"Selected: {len(marked)} stations | Displaying {len(display_stations)} of {len(stations)}"
                 try:
@@ -686,7 +694,10 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
                 
-                stdscr.refresh()
+                try:
+                    stdscr.refresh()
+                except curses.error:
+                    pass
                 
                 # Handle input
                 key = stdscr.getch()
@@ -695,15 +706,16 @@ class MarineDataConfigurator:
                     current_row -= 1
                 elif key == curses.KEY_DOWN and current_row < len(display_stations) - 1:
                     current_row += 1
-                elif key == ord(' '):  # Space to toggle selection
-                    if current_row in marked:
-                        marked.remove(current_row)
-                    else:
-                        marked.add(current_row)
-                elif key == 10 or key == 13:  # Enter to confirm
-                    selected = [display_stations[i] for i in marked]
+                elif key == ord(' '):
+                    if current_row < len(display_stations):
+                        if current_row in marked:
+                            marked.remove(current_row)
+                        else:
+                            marked.add(current_row)
+                elif key == 10 or key == 13:  # Enter
+                    selected = [display_stations[i] for i in marked if i < len(display_stations)]
                     break
-                elif key == 27:  # ESC to skip
+                elif key == 27:  # ESC
                     selected = []
                     break
                 elif key == ord('q'):  # Quit
@@ -714,67 +726,7 @@ class MarineDataConfigurator:
         try:
             return curses.wrapper(station_menu)
         except:
-            # If curses fails, fall back to simple selection
-            return self._simple_text_selection(stations, title)# Magic Animal Verification: Black Bear
-    """
-    Fix for curses display formatting issues:
-    - Proper text truncation to prevent overflow
-    - Better spacing and layout
-    - Fixed garbled text display
-    - Two-line format per station for better readability
-    """
-
-    # ==============================================================================
-    # CURSES DISPLAY FIX - Replace the station display loop in _curses_station_selection
-    # ==============================================================================
-
-    # Replace the station list display section with this:
-    for idx, station in enumerate(display_stations):
-        y = start_row + (idx * 2)  # Use 2 lines per station
-        if y >= height - 3:
-            break
-        
-        # Format station line with proper width calculation
-        mark = "[X]" if idx in marked else "[ ]"
-        distance = f"{station['distance_km']:.1f}km"
-        bearing = station.get('bearing_text', 'Unknown')
-        
-        # Calculate available width for name
-        prefix = f"{mark} {station['id']} - "
-        suffix = f" ({distance} {bearing})"
-        available_width = width - len(prefix) - len(suffix) - 2
-        
-        # Truncate name properly to fit
-        name = station['name']
-        if len(name) > available_width:
-            name = name[:available_width-3] + "..."
-        
-        line = f"{prefix}{name}{suffix}"
-        
-        # Highlight current row
-        attr = curses.A_REVERSE if idx == current_row else curses.A_NORMAL
-        try:
-            stdscr.addstr(y, 0, line[:width-1], attr)
-        except curses.error:
-            pass  # Skip if can't fit
-        
-        # Show capabilities on next line
-        caps = ', '.join(station.get('capabilities', [])[:2])
-        cap_line = f"    {caps}"
-        if y + 1 < height - 3:
-            try:
-                stdscr.addstr(y + 1, 0, cap_line[:width-1], curses.A_DIM)
-            except curses.error:
-                pass
-
-    # Also update the display_stations calculation to account for 2-line format:
-    display_stations = stations[:min(6, (height-start_row-3)//2)]  # Adjust for 2-line format
-
-    # And update navigation to handle 2-line format:
-    if key == curses.KEY_UP and current_row > 0:
-        current_row -= 1
-    elif key == curses.KEY_DOWN and current_row < len(display_stations) - 1:
-        current_row += 1
+            return self._simple_text_selection(stations, title)
 
     def _simple_text_selection(self, stations, title):
         """Simple text-based selection fallback with explanations."""
