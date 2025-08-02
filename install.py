@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Panda
+# Magic Animal: Panda Bear
 """
 WeeWX Marine Data Extension Installer
 
