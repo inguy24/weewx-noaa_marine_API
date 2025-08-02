@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Black Bear
+# Magic Animal: Panda
 """
 WeeWX Marine Data Extension Installer
 
@@ -586,7 +586,7 @@ class MarineDataConfigurator:
             return self._simple_station_selection(coops_stations, ndbc_stations)
 
     def _curses_station_selection(self, stations, title, icon):
-        """Curses-based station selection interface with user-friendly explanations."""
+        """Curses-based station selection interface with user-friendly explanations and proper formatting."""
         
         def station_menu(stdscr):
             curses.curs_set(0)  # Hide cursor
@@ -626,7 +626,7 @@ class MarineDataConfigurator:
                 # Explanation section
                 exp_start = 3
                 for i, line in enumerate(explanation):
-                    if exp_start + i < height - 8:  # Leave room for stations and footer
+                    if exp_start + i < height - 12:  # Leave more room for stations
                         stdscr.addstr(exp_start + i, 0, line[:width-1], curses.A_DIM)
                 
                 # Instructions
@@ -636,34 +636,55 @@ class MarineDataConfigurator:
                 
                 # Station list
                 start_row = inst_row + 3
-                display_stations = stations[:min(8, height-start_row-3)]  # Adjust for explanation text
+                # Account for 2-line format per station
+                max_stations = min(6, (height - start_row - 3) // 2)
+                display_stations = stations[:max_stations]
                 
                 for idx, station in enumerate(display_stations):
-                    y = start_row + idx
-                    if y >= height - 2:
+                    y = start_row + (idx * 2)  # Use 2 lines per station
+                    if y >= height - 3:
                         break
                     
-                    # Format station line
+                    # Format station line with proper width calculation
                     mark = "[X]" if idx in marked else "[ ]"
                     distance = f"{station['distance_km']:.1f}km"
                     bearing = station.get('bearing_text', 'Unknown')
-                    name = station['name'][:25]  # Truncate long names
-                    line = f"{mark} {station['id']} - {name} ({distance} {bearing})"
+                    
+                    # Calculate available width for name
+                    prefix = f"{mark} {station['id']} - "
+                    suffix = f" ({distance} {bearing})"
+                    available_width = width - len(prefix) - len(suffix) - 2
+                    
+                    # Truncate name properly to fit
+                    name = station['name']
+                    if len(name) > available_width:
+                        name = name[:available_width-3] + "..."
+                    
+                    line = f"{prefix}{name}{suffix}"
                     
                     # Highlight current row
                     attr = curses.A_REVERSE if idx == current_row else curses.A_NORMAL
-                    stdscr.addstr(y, 0, line[:width-1], attr)
+                    try:
+                        stdscr.addstr(y, 0, line[:width-1], attr)
+                    except curses.error:
+                        pass  # Skip if can't fit
                     
                     # Show capabilities on next line
-                    caps = ', '.join(station.get('capabilities', [])[:3])
-                    cap_line = f"    Capabilities: {caps}"
-                    if y + 1 < height - 2:
-                        stdscr.addstr(y + 1, 0, cap_line[:width-1], curses.A_DIM)
+                    caps = ', '.join(station.get('capabilities', [])[:2])
+                    cap_line = f"    {caps}"
+                    if y + 1 < height - 3:
+                        try:
+                            stdscr.addstr(y + 1, 0, cap_line[:width-1], curses.A_DIM)
+                        except curses.error:
+                            pass
                 
                 # Footer with selection count
                 footer_y = height - 2
-                footer = f"Selected: {len(marked)} stations"
-                stdscr.addstr(footer_y, 0, footer[:width-1], curses.A_BOLD)
+                footer = f"Selected: {len(marked)} stations | Displaying {len(display_stations)} of {len(stations)}"
+                try:
+                    stdscr.addstr(footer_y, 0, footer[:width-1], curses.A_BOLD)
+                except curses.error:
+                    pass
                 
                 stdscr.refresh()
                 
@@ -694,7 +715,66 @@ class MarineDataConfigurator:
             return curses.wrapper(station_menu)
         except:
             # If curses fails, fall back to simple selection
-            return self._simple_text_selection(stations, title)
+            return self._simple_text_selection(stations, title)# Magic Animal Verification: Black Bear
+    """
+    Fix for curses display formatting issues:
+    - Proper text truncation to prevent overflow
+    - Better spacing and layout
+    - Fixed garbled text display
+    - Two-line format per station for better readability
+    """
+
+    # ==============================================================================
+    # CURSES DISPLAY FIX - Replace the station display loop in _curses_station_selection
+    # ==============================================================================
+
+    # Replace the station list display section with this:
+    for idx, station in enumerate(display_stations):
+        y = start_row + (idx * 2)  # Use 2 lines per station
+        if y >= height - 3:
+            break
+        
+        # Format station line with proper width calculation
+        mark = "[X]" if idx in marked else "[ ]"
+        distance = f"{station['distance_km']:.1f}km"
+        bearing = station.get('bearing_text', 'Unknown')
+        
+        # Calculate available width for name
+        prefix = f"{mark} {station['id']} - "
+        suffix = f" ({distance} {bearing})"
+        available_width = width - len(prefix) - len(suffix) - 2
+        
+        # Truncate name properly to fit
+        name = station['name']
+        if len(name) > available_width:
+            name = name[:available_width-3] + "..."
+        
+        line = f"{prefix}{name}{suffix}"
+        
+        # Highlight current row
+        attr = curses.A_REVERSE if idx == current_row else curses.A_NORMAL
+        try:
+            stdscr.addstr(y, 0, line[:width-1], attr)
+        except curses.error:
+            pass  # Skip if can't fit
+        
+        # Show capabilities on next line
+        caps = ', '.join(station.get('capabilities', [])[:2])
+        cap_line = f"    {caps}"
+        if y + 1 < height - 3:
+            try:
+                stdscr.addstr(y + 1, 0, cap_line[:width-1], curses.A_DIM)
+            except curses.error:
+                pass
+
+    # Also update the display_stations calculation to account for 2-line format:
+    display_stations = stations[:min(6, (height-start_row-3)//2)]  # Adjust for 2-line format
+
+    # And update navigation to handle 2-line format:
+    if key == curses.KEY_UP and current_row > 0:
+        current_row -= 1
+    elif key == curses.KEY_DOWN and current_row < len(display_stations) - 1:
+        current_row += 1
 
     def _simple_text_selection(self, stations, title):
         """Simple text-based selection fallback with explanations."""
