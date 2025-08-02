@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Panda Bear
+# Magic Animal: Cicada
 """
 WeeWX Marine Data Extension Installer
 
@@ -1459,28 +1459,67 @@ class MarineDatabaseManager:
         except Exception as e:
             print(f"    ⚠️  Warning: Could not create table '{table_name}': {e}")
     
-    def _add_missing_fields(self, fields):
-        """Add missing fields using hybrid weectl/SQL approach."""
-        print("  🔧 Adding database fields...")
+    def _add_missing_fields(self, missing_fields, field_mappings):
+        """
+        Add missing database fields using hybrid approach from success manual.
         
-        # Group fields by database type for hybrid approach
-        numeric_fields = {}  # For weectl
-        text_fields = {}     # For direct SQL
+        Uses weectl for REAL/INTEGER types (confirmed supported)
+        Uses direct SQL for VARCHAR/TEXT types (weectl limitation workaround)
         
-        for field_name, field_config in fields.items():
-            db_type = field_config.get('database_type', 'REAL')
-            if db_type in ['REAL', 'INTEGER']:
-                numeric_fields[field_name] = field_config
+        Args:
+            missing_fields: Set of field names that need to be created
+            field_mappings: Dict mapping field names to their database types
+            
+        Returns:
+            int: Number of fields successfully created
+            
+        Fails fast on any real errors to prevent corrupted installations.
+        """
+        weectl_path = self._find_weectl()
+        config_path = getattr(self.config_dict, 'filename', '/etc/weewx/weewx.conf')
+        created_count = 0
+        
+        for field_name in sorted(missing_fields):
+            field_type = field_mappings[field_name]
+            
+            print(f"    Adding field '{field_name}' ({field_type})...")
+            
+            # Use weectl for numeric types (confirmed supported by success manual)
+            if field_type in ['REAL', 'INTEGER', 'real', 'integer', 'int']:
+                if not weectl_path:
+                    print(f"    ⚠️  weectl not found - using direct SQL for {field_name}")
+                    self._add_field_direct_sql(field_name, field_type)
+                    created_count += 1
+                    continue
+                
+                # CRITICAL: Use correct format from success manual
+                cmd = [weectl_path, 'database', 'add-column', field_name, 
+                    f'--config={config_path}', '-y']
+                cmd.insert(-2, f'--type={field_type}')  # Insert --type=REAL before -y
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                
+                if result.returncode == 0:
+                    print(f"    ✅ Successfully added '{field_name}' using weectl")
+                    created_count += 1
+                elif 'duplicate column' in result.stderr.lower():
+                    print(f"    ✅ Field '{field_name}' already exists")
+                    created_count += 1
+                else:
+                    print(f"    ⚠️  weectl warning for {field_name}: {result.stderr.strip()}")
+                    # Try direct SQL as fallback
+                    try:
+                        self._add_field_direct_sql(field_name, field_type)
+                        created_count += 1
+                    except Exception:
+                        pass  # Ignore fallback failures
+            
             else:
-                text_fields[field_name] = field_config
+                # Use direct SQL for VARCHAR/TEXT types (success manual pattern)
+                self._add_field_direct_sql(field_name, field_type)
+                created_count += 1
         
-        # Use weectl for numeric fields (success manual pattern)
-        if numeric_fields:
-            self._create_fields_with_weectl(numeric_fields)
-        
-        # Use direct SQL for TEXT/VARCHAR fields (success manual pattern)
-        if text_fields:
-            self._create_fields_with_sql(text_fields)
+        return created_count
     
     def _create_fields_with_weectl(self, fields):
         """Create numeric fields using weectl (success manual hybrid approach)."""
