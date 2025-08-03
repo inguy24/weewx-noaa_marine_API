@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Western Diamondback Rattlesnake
+# Magic Animal: Sidewinder
 """
 WeeWX Marine Data Extension Installer
 
@@ -125,296 +125,6 @@ class MarineDataInstaller(ExtensionInstaller):
                 import traceback
                 traceback.print_exc()
                 return False
-
-
-class TerminalUI:
-    """Simple terminal UI for field selection."""
-    
-    def __init__(self):
-        self.selected_items = set()
-    
-    def show_complexity_menu(self):
-        """Dynamic field listings from API-first YAML structure."""
-        print("\n" + "="*80)
-        print("OPENWEATHER DATA COLLECTION LEVEL")
-        print("="*80)
-        print("Choose which data fields to collect from OpenWeatherMap.")
-        print("Each level includes specific fields as listed below:")
-        print()
-        
-        try:
-            extension_dir = os.path.dirname(__file__)
-            config_path = os.path.join(extension_dir, 'openweather_fields.yaml')
-            with open(config_path, 'r') as f:
-                api_config = yaml.safe_load(f)
-            
-            all_fields = []
-            minimal_fields = []
-            
-            for module_name, module_config in api_config.get('api_modules', {}).items():
-                for field_name, field_config in module_config.get('fields', {}).items():
-                    display_name = field_config.get('display_name', field_name)
-                    complexity_levels = field_config.get('complexity_levels', [])
-                    
-                    all_fields.append(display_name)
-                    if 'minimal' in complexity_levels:
-                        minimal_fields.append(display_name)
-            
-            minimal_fields.sort()
-            all_fields.sort()
-            
-        except Exception as e:
-            print(f"Warning: Could not load field definitions: {e}")
-            print("Using basic descriptions instead of detailed field lists.")
-            
-            options = [
-                ("Minimal", "Essential fields for Extension 3 health predictions"),
-                ("All", "Everything available from free OpenWeather APIs"),
-                ("Custom", "Choose specific fields manually")
-            ]
-            
-            print("\nChoose data collection level:")
-            print("-" * 40)
-            
-            for i, (name, description) in enumerate(options, 1):
-                print(f"{i}. {name}")
-                print(f"   {description}")
-                print()
-            
-            while True:
-                try:
-                    choice = input("Enter choice [1-3]: ").strip()
-                    if choice in ['1', '2', '3']:
-                        complexity_levels = ['minimal', 'all', 'custom']
-                        selected = complexity_levels[int(choice) - 1]
-                        print(f"\n✓ Selected: {options[int(choice) - 1][0]}")
-                        return selected
-                    else:
-                        print("Invalid choice. Please enter 1, 2, or 3.")
-                except (KeyboardInterrupt, EOFError):
-                    print("\nInstallation cancelled by user.")
-                    sys.exit(1)
-        
-        def format_field_list(fields, indent="   "):
-            if not fields:
-                return f"{indent}No fields configured"
-            
-            lines = []
-            current_line = indent + "Fields: "
-            
-            for field in fields:
-                test_line = current_line + field + ", "
-                if len(test_line) > 75 and current_line != indent + "Fields: ":
-                    lines.append(current_line.rstrip(", "))
-                    current_line = indent + "       " + field + ", "
-                else:
-                    current_line = test_line
-            
-            if current_line.strip():
-                lines.append(current_line.rstrip(", "))
-            
-            return "\n".join(lines)
-        
-        print("1. MINIMAL COLLECTION")
-        print(f"   Essential fields for Extension 3 health predictions")
-        print(f"   {len(minimal_fields)} database fields")
-        print(format_field_list(minimal_fields))
-        print()
-        
-        print("2. ALL FIELDS")
-        print(f"   Complete OpenWeatherMap dataset with all available fields")
-        print(f"   {len(all_fields)} database fields")
-        print(format_field_list(all_fields))
-        print()
-        
-        print("3. CUSTOM SELECTION")
-        print(f"   Choose specific fields manually using interactive menu")
-        print(f"   Select from {len(all_fields)} available fields")
-        print()
-        
-        while True:
-            try:
-                choice = input("Enter choice [1-3]: ").strip()
-                if choice == '1':
-                    print(f"\n✓ Selected: Minimal Collection ({len(minimal_fields)} fields)")
-                    return 'minimal'
-                elif choice == '2':
-                    print(f"\n✓ Selected: All Fields ({len(all_fields)} fields)")
-                    return 'all'
-                elif choice == '3':
-                    print(f"\n✓ Selected: Custom Selection")
-                    return 'custom'
-                else:
-                    print("Invalid choice. Please enter 1, 2, or 3.")
-            except (KeyboardInterrupt, EOFError):
-                print("\nInstallation cancelled by user.")
-                sys.exit(1)
-
-    def show_custom_selection(self, field_definitions):
-        """Show flat field selection interface for new YAML structure."""
-        import curses
-        
-        def curses_main(stdscr):
-            # Initialize curses
-            curses.curs_set(0)  # Hide cursor
-            curses.use_default_colors()
-            if curses.has_colors():
-                curses.start_color()
-                curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight
-                curses.init_pair(2, curses.COLOR_GREEN, -1)  # Selected
-                curses.init_pair(3, curses.COLOR_BLUE, -1)   # Header
-            
-            # Build field list directly from YAML - no hardcoded categorization
-            all_fields = []
-            for field_name, field_info in field_definitions.items():
-                all_fields.append({
-                    'type': 'field',
-                    'name': field_name,
-                    'display': field_info['display_name'],
-                    'selected': False
-                })
-            
-            # Sort alphabetically by display name for consistent presentation
-            all_fields.sort(key=lambda x: x['display'])
-            
-            # State variables
-            current_item = 0
-            scroll_offset = 0
-            
-            def draw_interface():
-                stdscr.clear()
-                height, width = stdscr.getmaxyx()
-                
-                # Title
-                title = "CUSTOM FIELD SELECTION - Select All Desired Fields"
-                stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
-                
-                # Instructions
-                instructions = "↑↓:Navigate  SPACE:Toggle  ENTER:Confirm  q:Quit"
-                stdscr.addstr(1, (width - len(instructions)) // 2, instructions)
-                stdscr.addstr(2, 0, "─" * width)
-                
-                # Calculate visible area
-                visible_height = height - 6  # Leave space for title, instructions, summary
-                
-                # Adjust scroll if needed
-                nonlocal scroll_offset
-                if current_item < scroll_offset:
-                    scroll_offset = current_item
-                elif current_item >= scroll_offset + visible_height:
-                    scroll_offset = current_item - visible_height + 1
-                
-                # Display fields
-                for i in range(scroll_offset, min(scroll_offset + visible_height, len(all_fields))):
-                    field = all_fields[i]
-                    y_pos = 3 + (i - scroll_offset)
-                    
-                    if y_pos >= height - 3:  # Don't overwrite summary area
-                        break
-                    
-                    # Field item
-                    selected_mark = "[X]" if field['selected'] else "[ ]"
-                    
-                    # Highlight current item
-                    attr = 0
-                    if i == current_item:
-                        attr = curses.color_pair(1) | curses.A_BOLD
-                    elif field['selected']:
-                        attr = curses.color_pair(2)
-                    
-                    line = f"  {selected_mark} {field['display']}"
-                    stdscr.addstr(y_pos, 0, line[:width-1], attr)
-                
-                # Summary at bottom
-                selected_count = sum(1 for f in all_fields if f['selected'])
-                total_fields = len(all_fields)
-                summary = f"Selected: {selected_count}/{total_fields} fields"
-                stdscr.addstr(height-2, (width - len(summary)) // 2, summary, curses.color_pair(3))
-                
-                stdscr.refresh()
-            
-            # Main interaction loop
-            while True:
-                draw_interface()
-                key = stdscr.getch()
-                
-                if key == ord('q') or key == 27:  # ESC or 'q'
-                    return None
-                elif key == curses.KEY_UP and current_item > 0:
-                    current_item -= 1
-                elif key == curses.KEY_DOWN and current_item < len(all_fields) - 1:
-                    current_item += 1
-                elif key == ord(' '):  # Space to toggle selection
-                    all_fields[current_item]['selected'] = not all_fields[current_item]['selected']
-                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
-                    # Return flat field selection
-                    result = {}
-                    for field in all_fields:
-                        if field['selected']:
-                            result[field['name']] = True
-                    return result
-        
-        try:
-            result = curses.wrapper(curses_main)
-            
-            if result is None:
-                print("\nCustom selection cancelled.")
-                return None
-            
-            # Show final summary
-            selected_count = len(result)
-            print(f"\n" + "="*60)
-            print(f"SELECTION SUMMARY: {selected_count} fields selected")
-            print("="*60)
-            
-            if selected_count == 0:
-                print("Warning: No fields selected. Using 'minimal' defaults instead.")
-                return None
-            
-            # Show selected field names
-            if result:
-                selected_names = []
-                for field_name in result.keys():
-                    if field_name in field_definitions:
-                        selected_names.append(field_definitions[field_name]['display_name'])
-                
-                if selected_names:
-                    print("Selected fields:")
-                    for i, name in enumerate(selected_names[:5]):  # Show first 5
-                        print(f"  - {name}")
-                    if len(selected_names) > 5:
-                        print(f"  ... and {len(selected_names) - 5} more")
-            
-            return result
-            
-        except Exception as e:
-            print(f"\nError with custom selection interface: {e}")
-            print("Falling back to 'minimal' field selection.")
-            return None
-    
-    def confirm_selection(self, complexity_level, field_count_estimate):
-        """Confirm the user's selection before proceeding."""
-        print(f"\n" + "="*60)
-        print("CONFIGURATION CONFIRMATION")
-        print("="*60)
-        print(f"Data collection level: {complexity_level.title()}")
-        print(f"Estimated database fields: {field_count_estimate}")
-        print(f"This will modify your WeeWX database schema.")
-        print("-" * 60)
-        
-        while True:
-            try:
-                confirm = input("Proceed with this configuration? [y/n]: ").strip().lower()
-            except (KeyboardInterrupt, EOFError):
-                print("\nInstallation cancelled by user.")
-                sys.exit(1)
-            
-            if confirm in ['y', 'yes']:
-                return 'true'  # Return string instead of boolean
-            elif confirm in ['n', 'no']:
-                return 'false'  # Return string instead of boolean
-            else:
-                print("Please enter 'y' for yes or 'n' for no")
 
 
 class MarineDataConfigurator:
@@ -1224,11 +934,8 @@ class MarineDataConfigurator:
                 complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
                 selected_fields = complexity_config.get('fields', {})
             else:
-                # Create a simple UI instance for custom selection
-                ui = TerminalUI()
-                
                 print("\nStarting custom field selection interface...")
-                custom_selection = ui.show_custom_selection(field_definitions)
+                custom_selection = self.show_marine_custom_selection(field_definitions)
                 
                 # FIX: Don't fallback to defaults if user made a custom selection
                 if custom_selection is not None and len(custom_selection) > 0:
@@ -1703,8 +1410,8 @@ class MarineDataConfigurator:
             }
         }
 
-    def show_custom_selection(self, field_definitions):
-        """Show field selection interface grouped by data source (COOP vs NDBC)."""
+    def show_marine_custom_selection(self, field_definitions):
+        """Marine-specific field selection with COOP/NDBC grouping."""
         import curses
         
         def curses_main(stdscr):
@@ -1718,7 +1425,7 @@ class MarineDataConfigurator:
                 curses.init_pair(3, curses.COLOR_BLUE, -1)   # Header
                 curses.init_pair(4, curses.COLOR_CYAN, -1)   # Section headers
             
-            # Group fields by data source
+            # Group fields by Marine data source
             coops_fields = []
             ndbc_fields = []
             
@@ -1731,17 +1438,18 @@ class MarineDataConfigurator:
                     'description': field_info.get('description', '')
                 }
                 
-                api_module = field_info.get('api_module', '')
-                if 'coops' in api_module.lower():
+                # Group by api_module (coops_module vs ndbc_module)
+                api_module = field_info.get('api_module', '').lower()
+                if 'coops' in api_module:
                     coops_fields.append(field_entry)
-                elif 'ndbc' in api_module.lower():
+                elif 'ndbc' in api_module:
                     ndbc_fields.append(field_entry)
             
             # Sort each group alphabetically
             coops_fields.sort(key=lambda x: x['display'])
             ndbc_fields.sort(key=lambda x: x['display'])
             
-            # Create combined list with section headers
+            # Create combined list with Marine-specific section headers
             all_items = []
             
             # Add COOP section
@@ -1752,7 +1460,7 @@ class MarineDataConfigurator:
                     'description': 'Real-time water levels, tide predictions, coastal water temperature'
                 })
                 all_items.extend(coops_fields)
-                all_items.append({'type': 'spacer', 'display': ''})  # Empty line
+                all_items.append({'type': 'spacer', 'display': ''})
             
             # Add NDBC section  
             if ndbc_fields:
@@ -1765,14 +1473,13 @@ class MarineDataConfigurator:
             
             # State variables
             current_item = 0
-            scroll_offset = 0
             
             def draw_interface():
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
                 # Title
-                title = "CUSTOM FIELD SELECTION - Select Marine Data Fields"
+                title = "MARINE FIELD SELECTION - Choose Data Sources"
                 try:
                     stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
                 except curses.error:
@@ -1800,7 +1507,7 @@ class MarineDataConfigurator:
                     item_idx = start_idx + i
                     
                     if item['type'] == 'header':
-                        # Section header
+                        # Marine section header
                         try:
                             stdscr.addstr(y, 0, item['display'], curses.color_pair(4) | curses.A_BOLD)
                             if y + 1 < height - 2:
@@ -1811,7 +1518,7 @@ class MarineDataConfigurator:
                         # Empty line between sections
                         continue
                     elif item['type'] == 'field':
-                        # Field selection
+                        # Marine field selection
                         mark = "[X]" if item['selected'] else "[ ]"
                         line = f"  {mark} {item['display']}"
                         
@@ -1825,13 +1532,13 @@ class MarineDataConfigurator:
                         except curses.error:
                             pass
                 
-                # Summary at bottom
+                # Marine-specific summary at bottom
                 coops_selected = sum(1 for f in coops_fields if f['selected'])
                 ndbc_selected = sum(1 for f in ndbc_fields if f['selected'])
                 total_selected = coops_selected + ndbc_selected
                 total_fields = len(coops_fields) + len(ndbc_fields)
                 
-                summary = f"Selected: {total_selected}/{total_fields} fields (CO-OPS: {coops_selected}, NDBC: {ndbc_selected})"
+                summary = f"Selected: {total_selected}/{total_fields} fields (🌊 CO-OPS: {coops_selected}, 🛟 NDBC: {ndbc_selected})"
                 try:
                     stdscr.addstr(height-2, 0, summary[:width-1], curses.color_pair(3))
                 except curses.error:
@@ -1842,7 +1549,7 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
             
-            # Find next selectable item
+            # Find next selectable field
             def find_next_field(start_idx, direction=1):
                 items_count = len(all_items)
                 idx = start_idx
@@ -1873,7 +1580,7 @@ class MarineDataConfigurator:
                     if current_item < len(all_items) and all_items[current_item]['type'] == 'field':
                         all_items[current_item]['selected'] = not all_items[current_item]['selected']
                 elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
-                    # Return flat field selection
+                    # Return Marine field selection
                     result = {}
                     for item in all_items:
                         if item['type'] == 'field' and item['selected']:
@@ -1884,42 +1591,42 @@ class MarineDataConfigurator:
             result = curses.wrapper(curses_main)
             
             if result is None:
-                print("\nCustom selection cancelled.")
+                print("\nMarine field selection cancelled.")
                 return None
             
-            # Show final summary grouped by data source
+            # Show Marine-specific summary
             selected_count = len(result)
             print(f"\n" + "="*60)
-            print(f"SELECTION SUMMARY: {selected_count} fields selected")
+            print(f"MARINE FIELD SELECTION SUMMARY: {selected_count} fields selected")
             print("="*60)
             
             if selected_count == 0:
                 print("Warning: No fields selected. Using 'minimal' defaults instead.")
                 return None
             
-            # Group selected fields by data source for display
+            # Group selected fields by Marine data source for display
             coops_selected = []
             ndbc_selected = []
             
             for field_name in result.keys():
                 if field_name in field_definitions:
-                    api_module = field_definitions[field_name].get('api_module', '')
+                    api_module = field_definitions[field_name].get('api_module', '').lower()
                     display_name = field_definitions[field_name].get('display_name', field_name)
                     
-                    if 'coops' in api_module.lower():
+                    if 'coops' in api_module:
                         coops_selected.append(display_name)
-                    elif 'ndbc' in api_module.lower():
+                    elif 'ndbc' in api_module:
                         ndbc_selected.append(display_name)
             
             if coops_selected:
-                print(f"\n🌊 CO-OPS Fields ({len(coops_selected)} selected):")
+                print(f"\n🌊 CO-OPS Tide Station Fields ({len(coops_selected)} selected):")
                 for name in coops_selected[:3]:
                     print(f"  - {name}")
                 if len(coops_selected) > 3:
                     print(f"  ... and {len(coops_selected) - 3} more")
             
             if ndbc_selected:
-                print(f"\n🛟 NDBC Fields ({len(ndbc_selected)} selected):")
+                print(f"\n🛟 NDBC Buoy Station Fields ({len(ndbc_selected)} selected):")
                 for name in ndbc_selected[:3]:
                     print(f"  - {name}")
                 if len(ndbc_selected) > 3:
@@ -1928,9 +1635,11 @@ class MarineDataConfigurator:
             return result
             
         except Exception as e:
-            print(f"\nError with custom selection interface: {e}")
+            print(f"\nError with Marine field selection interface: {e}")
             print("Falling back to 'minimal' field selection.")
             return None
+    
+
 
 class MarineDatabaseManager:
     """
