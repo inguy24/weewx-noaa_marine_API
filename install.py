@@ -1430,7 +1430,7 @@ class MarineDataConfigurator:
         print(f"📊 Configuration Summary:")
         print(f"  • CO-OPS stations: {len(coops_stations)}")
         print(f"  • NDBC stations: {len(ndbc_stations)}")
-        print(f"  • Selected fields: {len(fields['fields'])}")
+        print(f"  • Selected fields: {len(fields)}")  # FIX: Remove ['fields'] access
         print(f"  • User location: {user_lat:.4f}, {user_lon:.4f}")
         
         # Generate comprehensive configuration dictionary
@@ -1455,7 +1455,7 @@ class MarineDataConfigurator:
                 'ndbc_module': self._generate_ndbc_module_config(ndbc_stations, intervals),
                 
                 # Field mappings transformed from YAML to CONF format
-                'field_mappings': self._transform_fields_yaml_to_conf(fields['fields']),
+                'field_mappings': self._transform_fields_yaml_to_conf(fields),  # FIX: Remove ['fields'] access
                 
                 # Collection intervals and timing
                 'collection_intervals': self._generate_interval_configuration(intervals),
@@ -1704,7 +1704,7 @@ class MarineDataConfigurator:
         }
 
     def show_custom_selection(self, field_definitions):
-        """Show flat field selection interface for new YAML structure."""
+        """Show field selection interface grouped by data source (COOP vs NDBC)."""
         import curses
         
         def curses_main(stdscr):
@@ -1716,19 +1716,52 @@ class MarineDataConfigurator:
                 curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Highlight
                 curses.init_pair(2, curses.COLOR_GREEN, -1)  # Selected
                 curses.init_pair(3, curses.COLOR_BLUE, -1)   # Header
+                curses.init_pair(4, curses.COLOR_CYAN, -1)   # Section headers
             
-            # Build field list directly from YAML - no hardcoded categorization
-            all_fields = []
+            # Group fields by data source
+            coops_fields = []
+            ndbc_fields = []
+            
             for field_name, field_info in field_definitions.items():
-                all_fields.append({
+                field_entry = {
                     'type': 'field',
                     'name': field_name,
-                    'display': field_info['display_name'],
-                    'selected': False
-                })
+                    'display': field_info.get('display_name', field_name),
+                    'selected': False,
+                    'description': field_info.get('description', '')
+                }
+                
+                api_module = field_info.get('api_module', '')
+                if 'coops' in api_module.lower():
+                    coops_fields.append(field_entry)
+                elif 'ndbc' in api_module.lower():
+                    ndbc_fields.append(field_entry)
             
-            # Sort alphabetically by display name for consistent presentation
-            all_fields.sort(key=lambda x: x['display'])
+            # Sort each group alphabetically
+            coops_fields.sort(key=lambda x: x['display'])
+            ndbc_fields.sort(key=lambda x: x['display'])
+            
+            # Create combined list with section headers
+            all_items = []
+            
+            # Add COOP section
+            if coops_fields:
+                all_items.append({
+                    'type': 'header',
+                    'display': '🌊 CO-OPS TIDE STATIONS',
+                    'description': 'Real-time water levels, tide predictions, coastal water temperature'
+                })
+                all_items.extend(coops_fields)
+                all_items.append({'type': 'spacer', 'display': ''})  # Empty line
+            
+            # Add NDBC section  
+            if ndbc_fields:
+                all_items.append({
+                    'type': 'header', 
+                    'display': '🛟 NDBC BUOY STATIONS',
+                    'description': 'Offshore marine weather, waves, sea surface temperature'
+                })
+                all_items.extend(ndbc_fields)
             
             # State variables
             current_item = 0
@@ -1739,55 +1772,91 @@ class MarineDataConfigurator:
                 height, width = stdscr.getmaxyx()
                 
                 # Title
-                title = "CUSTOM FIELD SELECTION - Select All Desired Fields"
-                stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+                title = "CUSTOM FIELD SELECTION - Select Marine Data Fields"
+                try:
+                    stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+                except curses.error:
+                    pass
                 
                 # Instructions
                 instructions = "↑↓:Navigate  SPACE:Toggle  ENTER:Confirm  q:Quit"
-                stdscr.addstr(2, (width - len(instructions)) // 2, instructions)
+                try:
+                    stdscr.addstr(2, (width - len(instructions)) // 2, instructions)
+                except curses.error:
+                    pass
                 
-                # Field list
-                start_row = 4
-                visible_rows = height - start_row - 3
+                # Calculate visible range
+                list_start = 4
+                list_height = height - 6
+                start_idx = max(0, current_item - list_height // 2)
+                end_idx = min(len(all_items), start_idx + list_height)
                 
-                # Adjust scroll offset
-                if current_item < scroll_offset:
-                    scroll_offset = current_item
-                elif current_item >= scroll_offset + visible_rows:
-                    scroll_offset = current_item - visible_rows + 1
-                
-                # Display fields
-                for i in range(visible_rows):
-                    field_idx = scroll_offset + i
-                    if field_idx >= len(all_fields):
+                # Display items
+                for i, item in enumerate(all_items[start_idx:end_idx]):
+                    y = list_start + i
+                    if y >= height - 2:
                         break
                     
-                    field = all_fields[field_idx]
-                    y = start_row + i
+                    item_idx = start_idx + i
                     
-                    # Selection indicator
-                    mark = "[X]" if field['selected'] else "[ ]"
-                    
-                    # Format line
-                    line = f"{mark} {field['display']}"
-                    
-                    # Highlight current item
-                    attr = curses.A_REVERSE if field_idx == current_item else curses.A_NORMAL
-                    if field['selected']:
-                        attr |= curses.color_pair(2)
-                    
-                    try:
-                        stdscr.addstr(y, 0, line[:width-1], attr)
-                    except curses.error:
-                        pass
+                    if item['type'] == 'header':
+                        # Section header
+                        try:
+                            stdscr.addstr(y, 0, item['display'], curses.color_pair(4) | curses.A_BOLD)
+                            if y + 1 < height - 2:
+                                stdscr.addstr(y + 1, 2, item['description'][:width-4], curses.A_DIM)
+                        except curses.error:
+                            pass
+                    elif item['type'] == 'spacer':
+                        # Empty line between sections
+                        continue
+                    elif item['type'] == 'field':
+                        # Field selection
+                        mark = "[X]" if item['selected'] else "[ ]"
+                        line = f"  {mark} {item['display']}"
+                        
+                        # Highlight current item
+                        attr = curses.A_REVERSE if item_idx == current_item else curses.A_NORMAL
+                        if item['selected']:
+                            attr |= curses.color_pair(2)
+                        
+                        try:
+                            stdscr.addstr(y, 0, line[:width-1], attr)
+                        except curses.error:
+                            pass
                 
                 # Summary at bottom
-                selected_count = sum(1 for f in all_fields if f['selected'])
-                total_fields = len(all_fields)
-                summary = f"Selected: {selected_count}/{total_fields} fields"
-                stdscr.addstr(height-2, (width - len(summary)) // 2, summary, curses.color_pair(3))
+                coops_selected = sum(1 for f in coops_fields if f['selected'])
+                ndbc_selected = sum(1 for f in ndbc_fields if f['selected'])
+                total_selected = coops_selected + ndbc_selected
+                total_fields = len(coops_fields) + len(ndbc_fields)
                 
-                stdscr.refresh()
+                summary = f"Selected: {total_selected}/{total_fields} fields (CO-OPS: {coops_selected}, NDBC: {ndbc_selected})"
+                try:
+                    stdscr.addstr(height-2, 0, summary[:width-1], curses.color_pair(3))
+                except curses.error:
+                    pass
+                
+                try:
+                    stdscr.refresh()
+                except curses.error:
+                    pass
+            
+            # Find next selectable item
+            def find_next_field(start_idx, direction=1):
+                items_count = len(all_items)
+                idx = start_idx
+                
+                while True:
+                    idx = (idx + direction) % items_count
+                    if idx == start_idx:  # Wrapped around
+                        break
+                    if all_items[idx]['type'] == 'field':
+                        return idx
+                return start_idx
+            
+            # Initialize current item to first field
+            current_item = find_next_field(-1, 1)
             
             # Main interaction loop
             while True:
@@ -1796,52 +1865,72 @@ class MarineDataConfigurator:
                 
                 if key == ord('q') or key == 27:  # ESC or 'q'
                     return None
-                elif key == curses.KEY_UP and current_item > 0:
-                    current_item -= 1
-                elif key == curses.KEY_DOWN and current_item < len(all_fields) - 1:
-                    current_item += 1
+                elif key == curses.KEY_UP:
+                    current_item = find_next_field(current_item, -1)
+                elif key == curses.KEY_DOWN:
+                    current_item = find_next_field(current_item, 1)
                 elif key == ord(' '):  # Space to toggle selection
-                    all_fields[current_item]['selected'] = not all_fields[current_item]['selected']
+                    if current_item < len(all_items) and all_items[current_item]['type'] == 'field':
+                        all_items[current_item]['selected'] = not all_items[current_item]['selected']
                 elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
                     # Return flat field selection
                     result = {}
-                    for field in all_fields:
-                        if field['selected']:
-                            result[field['name']] = True
+                    for item in all_items:
+                        if item['type'] == 'field' and item['selected']:
+                            result[item['name']] = True
                     return result
         
-        # REMOVED: broad except Exception catch to see what's failing
-        result = curses.wrapper(curses_main)
-        
-        if result is None:
-            print("\nCustom selection cancelled.")
-            return None
-        
-        # Show final summary
-        selected_count = len(result)
-        print(f"\n" + "="*60)
-        print(f"SELECTION SUMMARY: {selected_count} fields selected")
-        print("="*60)
-        
-        if selected_count == 0:
-            print("Warning: No fields selected. Using 'minimal' defaults instead.")
-            return None
-        
-        # Show selected field names
-        if result:
-            selected_names = []
+        try:
+            result = curses.wrapper(curses_main)
+            
+            if result is None:
+                print("\nCustom selection cancelled.")
+                return None
+            
+            # Show final summary grouped by data source
+            selected_count = len(result)
+            print(f"\n" + "="*60)
+            print(f"SELECTION SUMMARY: {selected_count} fields selected")
+            print("="*60)
+            
+            if selected_count == 0:
+                print("Warning: No fields selected. Using 'minimal' defaults instead.")
+                return None
+            
+            # Group selected fields by data source for display
+            coops_selected = []
+            ndbc_selected = []
+            
             for field_name in result.keys():
                 if field_name in field_definitions:
-                    selected_names.append(field_definitions[field_name]['display_name'])
+                    api_module = field_definitions[field_name].get('api_module', '')
+                    display_name = field_definitions[field_name].get('display_name', field_name)
+                    
+                    if 'coops' in api_module.lower():
+                        coops_selected.append(display_name)
+                    elif 'ndbc' in api_module.lower():
+                        ndbc_selected.append(display_name)
             
-            if selected_names:
-                print("Selected fields:")
-                for i, name in enumerate(selected_names[:5]):  # Show first 5
+            if coops_selected:
+                print(f"\n🌊 CO-OPS Fields ({len(coops_selected)} selected):")
+                for name in coops_selected[:3]:
                     print(f"  - {name}")
-                if len(selected_names) > 5:
-                    print(f"  ... and {len(selected_names) - 5} more")
-        
-        return result
+                if len(coops_selected) > 3:
+                    print(f"  ... and {len(coops_selected) - 3} more")
+            
+            if ndbc_selected:
+                print(f"\n🛟 NDBC Fields ({len(ndbc_selected)} selected):")
+                for name in ndbc_selected[:3]:
+                    print(f"  - {name}")
+                if len(ndbc_selected) > 3:
+                    print(f"  ... and {len(ndbc_selected) - 3} more")
+            
+            return result
+            
+        except Exception as e:
+            print(f"\nError with custom selection interface: {e}")
+            print("Falling back to 'minimal' field selection.")
+            return None
 
 class MarineDatabaseManager:
     """
