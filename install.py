@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Walking Stick
+# Magic Animal: Hissing Cockroach
 """
 WeeWX Marine Data Extension Installer
 
@@ -1796,25 +1796,33 @@ class MarineDatabaseManager:
         print(f"    • Fields created: {created_count}")
 
     def _extract_field_mappings_from_selection(self, selected_options):
-        """Extract database field mappings from selected options structure."""
+        """Extract database field mappings from configuration written during setup."""
         field_mappings = {}
         
-        # Extract fields from selected_options structure
-        fields_data = selected_options.get('fields', {})
+        # The field mappings were already written to config_dict during interactive setup
+        # Extract them using the same pattern as the service code
+        service_config = self.config_dict.get('MarineDataService', {})
+        if not service_config:
+            print("    ⚠️  Warning: No MarineDataService configuration found")
+            return field_mappings
         
-        if 'fields' in fields_data:
-            # Structure: {'fields': {'fields': {'field_name': {...}}}}
-            field_configs = fields_data['fields']
-            
-            for field_name, field_config in field_configs.items():
-                if isinstance(field_config, dict):
-                    db_field = field_config.get('database_field')
-                    db_type = field_config.get('database_type', 'REAL')
-                    
-                    if db_field:
-                        field_mappings[db_field] = db_type
-                    else:
-                        print(f"    ⚠️  Warning: No database_field for '{field_name}'")
+        config_field_mappings = service_config.get('field_mappings', {})
+        if not config_field_mappings:
+            print("    ⚠️  Warning: No field_mappings found in configuration")
+            return field_mappings
+        
+        # Extract database fields from all modules
+        for module_name, module_mappings in config_field_mappings.items():
+            if isinstance(module_mappings, dict):
+                for field_name, field_config in module_mappings.items():
+                    if isinstance(field_config, dict):
+                        db_field = field_config.get('database_field')
+                        db_type = field_config.get('database_type', 'REAL')
+                        
+                        if db_field:
+                            field_mappings[db_field] = db_type
+                        else:
+                            print(f"    ⚠️  Warning: No database_field for '{field_name}'")
         
         return field_mappings
 
