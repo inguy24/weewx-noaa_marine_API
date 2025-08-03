@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Sidewinder
+# Magic Animal: Walking Stick
 """
 WeeWX Marine Data Extension Installer
 
@@ -1300,15 +1300,22 @@ class MarineDataConfigurator:
             'warnings': warnings
         }
     
-    def _transform_fields_yaml_to_conf(self, yaml_fields):
+    def _transform_fields_yaml_to_conf(self, selected_fields):
         """Transform YAML field definitions to CONF format with comprehensive mapping."""
         conf_mappings = {}
         
-        if not yaml_fields:
-            print("⚠️  No YAML fields to transform - using fallback field mappings")
+        # Get the full field definitions from YAML
+        yaml_field_definitions = self.yaml_data.get('fields', {})
+        
+        if not yaml_field_definitions:
+            print("⚠️  No YAML field definitions found - using fallback field mappings")
             return self._get_fallback_field_mappings()
         
-        print(f"🔄 Transforming {len(yaml_fields)} YAML fields to CONF format...")
+        if not selected_fields:
+            print("⚠️  No fields selected - using fallback field mappings")
+            return self._get_fallback_field_mappings()
+        
+        print(f"🔄 Transforming {len(selected_fields)} selected fields to CONF format...")
         
         # Track field statistics for validation
         field_stats = {
@@ -1320,7 +1327,18 @@ class MarineDataConfigurator:
             'text_fields': 0
         }
         
-        for field_name, field_config in yaml_fields.items():
+        # Process each selected field
+        for field_name, is_selected in selected_fields.items():
+            if not is_selected:  # Skip unselected fields
+                continue
+                
+            # Look up the field definition in YAML
+            if field_name not in yaml_field_definitions:
+                print(f"    ⚠️  Warning: Field '{field_name}' not found in YAML definitions")
+                continue
+                
+            field_config = yaml_field_definitions[field_name]
+            
             try:
                 # Core field mapping
                 conf_field = {
@@ -1328,7 +1346,7 @@ class MarineDataConfigurator:
                     'database_type': field_config.get('database_type', 'REAL'),
                     'database_table': field_config.get('database_table', 'archive'),
                     'unit_system': field_config.get('unit_system', 'METRIC'),
-                    'api_source': field_config.get('api_source', 'unknown')
+                    'api_source': field_config.get('api_module', 'unknown')
                 }
                 
                 # Add extended mapping information
@@ -1384,6 +1402,10 @@ class MarineDataConfigurator:
         print(f"    • Marine tables: {field_stats['marine_tables']}")
         print(f"    • Numeric fields: {field_stats['numeric_fields']}")
         print(f"    • Text fields: {field_stats['text_fields']}")
+        
+        if not conf_mappings:
+            print("⚠️  No field mappings created - using fallback")
+            return self._get_fallback_field_mappings()
         
         return conf_mappings
     
