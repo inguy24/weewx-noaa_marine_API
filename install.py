@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Brown Recluse
+# Magic Animal: Armadillo
 """
 WeeWX Marine Data Extension Installer
 
@@ -1534,25 +1534,151 @@ class MarineDatabaseManager:
     
     def __init__(self, config_dict):
         self.config_dict = config_dict
+
+    def _check_existing_fields(self):
+        """Check which marine fields already exist in database."""
+        try:
+            # CRITICAL: Use 'marine_' prefix instead of 'ow_' prefix
+            db_binding = 'wx_binding'
+            
+            with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
+                existing_fields = []
+                for column in dbmanager.connection.genSchemaOf('archive'):
+                    field_name = column[1]
+                    if field_name.startswith('marine_'):  # Marine fields prefix
+                        existing_fields.append(field_name)
+            
+            return existing_fields
+        except Exception as e:
+            print(f"  Warning: Could not check existing database fields: {e}")
+            return []
+
+    def _add_missing_fields(self, missing_fields, field_mappings):
+        """Add missing database fields using hybrid approach from OpenWeather success patterns."""
+        weectl_path = self._find_weectl()
+        config_path = getattr(self.config_dict, 'filename', '/etc/weewx/weewx.conf')
+        created_count = 0
         
+        for field_name in sorted(missing_fields):
+            field_type = field_mappings[field_name]
+            
+            print(f"  Adding field '{field_name}' ({field_type})...")
+            
+            # Use weectl for numeric types (confirmed supported)
+            if field_type in ['REAL', 'INTEGER', 'real', 'integer', 'int']:
+                if not weectl_path:
+                    raise Exception("weectl executable not found - required for numeric field types")
+                
+                # CRITICAL: Use equals sign format for all parameters
+                cmd = [weectl_path, 'database', 'add-column', field_name, 
+                    f'--config={config_path}', '-y']
+                cmd.insert(-2, f'--type={field_type}')
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                
+                if result.returncode == 0:
+                    print(f"    ✓ Successfully added '{field_name}' using weectl")
+                    created_count += 1
+                elif 'duplicate column' in result.stderr.lower():
+                    print(f"    ✓ Field '{field_name}' already exists")
+                    created_count += 1
+                else:
+                    raise Exception(f"weectl failed to add '{field_name}': {result.stderr.strip()}")
+            
+            else:
+                # Use direct SQL for VARCHAR/TEXT types (weectl limitation workaround)
+                self._add_field_direct_sql(field_name, field_type)
+                created_count += 1
+        
+        return created_count
+
+    def _add_field_direct_sql(self, field_name, field_type):
+        """Add field using direct SQL through WeeWX database manager."""
+        try:
+            db_binding = 'wx_binding'
+            
+            with weewx.manager.open_manager_with_config(self.config_dict, db_binding) as dbmanager:
+                # Convert MySQL-specific types for SQLite compatibility
+                if field_type.startswith('VARCHAR'):
+                    sql_type = 'TEXT' if 'sqlite' in str(dbmanager.connection).lower() else field_type
+                else:
+                    sql_type = field_type
+                
+                sql = f"ALTER TABLE archive ADD COLUMN {field_name} {sql_type}"
+                dbmanager.connection.execute(sql)
+                print(f"    ✓ Successfully added '{field_name}' using direct SQL")
+                
+        except Exception as e:
+            error_msg = str(e).lower()
+            if 'duplicate column' in error_msg or 'already exists' in error_msg:
+                print(f"    ✓ Field '{field_name}' already exists")
+            else:
+                print(f"    ❌ Failed to add '{field_name}': {e}")
+                raise Exception(f"Direct SQL field creation failed: {e}")
+
     def extend_database_schema(self, selected_options):
-        """Extend database schema based on selected fields and stations."""
+        """Extend database schema following OpenWeather success patterns."""
         print("\n🗄️  DATABASE SCHEMA EXTENSION")
         print("-" * 40)
         
-        fields = selected_options.get('fields', {}).get('fields', {})
-        if not fields:
-            print("⚠️  No fields selected - skipping database extension.")
+        # Extract field mappings from selected options
+        field_mappings = self._extract_field_mappings_from_selection(selected_options)
+        
+        if not field_mappings:
+            print("⚠️  No field mappings found - skipping database extension.")
             return
         
-        # Create database tables for two-table architecture
-        self._create_database_tables(fields)
+        print("  📋 Creating database fields...")
+        print(f"  📊 Found {len(field_mappings)} fields to process")
         
-        # Add missing fields to existing tables
-        self._add_missing_fields(fields)
+        # Check existing fields (CRITICAL - this was missing)
+        existing_fields = self._check_existing_fields()
         
-        print("✅ Database schema extension completed")
-    
+        # Determine missing fields
+        missing_fields = set(field_mappings.keys()) - set(existing_fields)
+        already_present = set(field_mappings.keys()) & set(existing_fields)
+        
+        # Report existing fields
+        if already_present:
+            print("  ✓ Fields already present in database:")
+            for field in sorted(already_present):
+                print(f"    • {field}")
+        
+        # Add missing fields
+        created_count = 0
+        if missing_fields:
+            print(f"  🔧 Adding {len(missing_fields)} missing fields:")
+            created_count = self._add_missing_fields(missing_fields, field_mappings)
+        else:
+            print("  ✅ All required fields already exist in database.")
+        
+        print(f"\n✅ Database schema extension completed")
+        print(f"    • Fields already present: {len(already_present)}")
+        print(f"    • Fields created: {created_count}")
+
+    def _extract_field_mappings_from_selection(self, selected_options):
+        """Extract database field mappings from selected options structure."""
+        field_mappings = {}
+        
+        # Extract fields from selected_options structure
+        fields_data = selected_options.get('fields', {})
+        
+        if 'fields' in fields_data:
+            # Structure: {'fields': {'fields': {'field_name': {...}}}}
+            field_configs = fields_data['fields']
+            
+            for field_name, field_config in field_configs.items():
+                if isinstance(field_config, dict):
+                    db_field = field_config.get('database_field')
+                    db_type = field_config.get('database_type', 'REAL')
+                    
+                    if db_field:
+                        field_mappings[db_field] = db_type
+                    else:
+                        print(f"    ⚠️  Warning: No database_field for '{field_name}'")
+        
+        return field_mappings
+
     def _create_database_tables(self, fields):
         """Create database tables for two-table architecture."""
         print("  📋 Creating database tables...")
@@ -1569,7 +1695,7 @@ class MarineDatabaseManager:
                 print(f"    ✅ Table '{table_name}' ready")
     
     def _create_table_if_not_exists(self, table_name, fields):
-        """Create table if it doesn't exist."""
+        """Create table if it doesn't exist - COMPLETE IMPLEMENTATION."""
         try:
             # Get database path from WeeWX configuration
             db_binding = self.config_dict.get('DataBindings', {}).get('wx_binding', {})
@@ -1598,22 +1724,6 @@ class MarineDatabaseManager:
         except Exception as e:
             print(f"    ⚠️  Warning: Could not create table '{table_name}': {e}")
     
-    def _add_missing_fields(self, fields):
-        """Add missing database fields using hybrid approach from success manual."""
-        print("  🔧 Adding missing database fields...")
-        
-        try:
-            # Try weectl for numeric types first
-            self._create_fields_with_weectl(fields)
-            
-            # Use direct SQL for text types (weectl limitation)
-            self._create_fields_with_sql(fields)
-            
-        except Exception as e:
-            print(f"    ❌ Database field creation failed: {e}")
-            print(f"    💡 Manual commands needed - see weectl database add-column help")
-            raise
-
     def _create_fields_with_weectl(self, fields):
         """Create REAL/INTEGER fields using weectl (success manual pattern)."""
         print("    📊 Creating numeric fields with weectl...")
@@ -1752,6 +1862,13 @@ class MarineDatabaseManager:
                 continue
         
         print("  Warning: weectl not found - will use direct SQL for all fields")
+        return None
+
+    def _find_weectl(self):
+        """Find weectl executable path."""
+        for path in ['/usr/bin/weectl', '/usr/local/bin/weectl', 'weectl']:
+            if subprocess.run(['which', path], capture_output=True).returncode == 0:
+                return path
         return None
 
 if __name__ == '__main__':
