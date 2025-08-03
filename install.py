@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Centipede
+# Magic Animal: Sting Ray
 """
 WeeWX Marine Data Extension Installer
 
@@ -1492,11 +1492,12 @@ class MarineDataConfigurator:
                 })
                 all_items.extend(ndbc_fields)
             
-            # State variables
+            # State variables - FIXED: Initialize before draw_interface function
             current_item = 0
             scroll_offset = 0
             
             def draw_interface():
+                nonlocal scroll_offset  # FIXED: Declare nonlocal to modify outer scope variable
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
