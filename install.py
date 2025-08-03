@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Millipede
+# Magic Animal: Centipede
 """
 WeeWX Marine Data Extension Installer
 
@@ -1455,9 +1455,8 @@ class MarineDataConfigurator:
                 field_entry = {
                     'type': 'field',
                     'name': field_name,
-                    'display': field_info.get('display_name', field_name),
-                    'selected': False,
-                    'description': field_info.get('description', '')
+                    'display': field_info.get('display_name', field_name),  # CLEAN field name only
+                    'selected': False
                 }
                 
                 # Group by api_module (coops_module vs ndbc_module)
@@ -1482,9 +1481,9 @@ class MarineDataConfigurator:
                     'description': 'Real-time water levels, tide predictions, coastal water temperature'
                 })
                 all_items.extend(coops_fields)
-                all_items.append({'type': 'spacer', 'display': ''})
+                all_items.append({'type': 'spacer'})  # Add spacing between sections
             
-            # Add NDBC section  
+            # Add NDBC section
             if ndbc_fields:
                 all_items.append({
                     'type': 'header', 
@@ -1495,54 +1494,60 @@ class MarineDataConfigurator:
             
             # State variables
             current_item = 0
+            scroll_offset = 0
             
             def draw_interface():
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
                 # Title
-                title = "MARINE FIELD SELECTION - Choose Data Sources"
+                title = "MARINE FIELD SELECTION - Choose Your Data Sources"
                 try:
                     stdscr.addstr(0, (width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
                 except curses.error:
                     pass
                 
                 # Instructions
-                instructions = "↑↓:Navigate  SPACE:Toggle  ENTER:Confirm  q:Quit"
+                instructions = "↑↓: Navigate  SPACE: Select  ENTER: Confirm  ESC: Cancel"
                 try:
-                    stdscr.addstr(2, (width - len(instructions)) // 2, instructions)
+                    stdscr.addstr(1, (width - len(instructions)) // 2, instructions)
                 except curses.error:
                     pass
                 
-                # Calculate visible range
-                list_start = 4
-                list_height = height - 6
-                start_idx = max(0, current_item - list_height // 2)
-                end_idx = min(len(all_items), start_idx + list_height)
+                # Calculate display area
+                start_y = 3
+                display_height = height - 5  # Leave room for title, instructions, and summary
+                
+                # Calculate scroll range
+                if len(all_items) > display_height:
+                    if current_item < scroll_offset:
+                        scroll_offset = current_item
+                    elif current_item >= scroll_offset + display_height:
+                        scroll_offset = current_item - display_height + 1
                 
                 # Display items
-                for i, item in enumerate(all_items[start_idx:end_idx]):
-                    y = list_start + i
-                    if y >= height - 2:
+                for i in range(display_height):
+                    item_idx = scroll_offset + i
+                    if item_idx >= len(all_items):
                         break
-                    
-                    item_idx = start_idx + i
+                        
+                    item = all_items[item_idx]
+                    y = start_y + i
                     
                     if item['type'] == 'header':
-                        # Marine section header
+                        # Marine section header - FIXED: Use only the display text, no description bleeding
                         try:
                             stdscr.addstr(y, 0, item['display'], curses.color_pair(4) | curses.A_BOLD)
-                            if y + 1 < height - 2:
-                                stdscr.addstr(y + 1, 2, item['description'][:width-4], curses.A_DIM)
+                            # REMOVED: Description display that was causing text bleeding
                         except curses.error:
                             pass
                     elif item['type'] == 'spacer':
                         # Empty line between sections
                         continue
                     elif item['type'] == 'field':
-                        # Marine field selection
+                        # Marine field selection - FIXED: Clean display name only
                         mark = "[X]" if item['selected'] else "[ ]"
-                        line = f"  {mark} {item['display']}"
+                        line = f"  {mark} {item['display']}"  # CLEAN: Only the display name
                         
                         # Highlight current item
                         attr = curses.A_REVERSE if item_idx == current_item else curses.A_NORMAL
