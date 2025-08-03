@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Hissing Cockroach
+# Magic Animal: Millipede
 """
 WeeWX Marine Data Extension Installer
 
@@ -80,6 +80,8 @@ class MarineDataInstaller(ExtensionInstaller):
         """
         Installation orchestration - delegates to specialist classes.
         Follows success manual pattern of simple orchestration.
+        
+        FIXED: Merge configuration before database operations so field mappings are available.
         """
         try:
             print("\n" + "="*80)
@@ -93,11 +95,16 @@ class MarineDataInstaller(ExtensionInstaller):
             configurator = MarineDataConfigurator(engine.config_dict)
             config_dict, selected_options = configurator.run_interactive_setup()
             
-            # Step 2: Database schema management (delegated)
-            db_manager = MarineDatabaseManager(engine.config_dict)
+            # Step 2: CRITICAL FIX - Merge configurations BEFORE database operations
+            # This ensures the database manager has access to field mappings
+            merged_config = engine.config_dict.copy()
+            merged_config.update(config_dict)
+            
+            # Step 3: Database schema management with merged configuration
+            db_manager = MarineDatabaseManager(merged_config)
             db_manager.extend_database_schema(selected_options)
             
-            # Step 3: Update engine configuration
+            # Step 4: Update engine configuration
             engine.config_dict.update(config_dict)
             
             print("\n" + "="*80)
