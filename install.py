@@ -1315,12 +1315,12 @@ class MarineDataConfigurator:
         yaml_field_definitions = self.yaml_data.get('fields', {})
         
         if not yaml_field_definitions:
-            print("⚠️  No YAML field definitions found - using fallback field mappings")
-            return self._get_fallback_field_mappings()
+            print("❌ CRITICAL ERROR: No YAML field definitions found")
+            return {}
         
         if not selected_fields:
-            print("⚠️  No fields selected - using fallback field mappings")
-            return self._get_fallback_field_mappings()
+            print("❌ CRITICAL ERROR: No fields selected")
+            return {}
         
         print(f"🔄 Transforming {len(selected_fields)} selected fields to CONF format...")
         
@@ -1334,7 +1334,7 @@ class MarineDataConfigurator:
             'text_fields': 0
         }
         
-        # Process each selected field
+        # Process each selected field and group by module
         for field_name, is_selected in selected_fields.items():
             if not is_selected:  # Skip unselected fields
                 continue
@@ -1347,62 +1347,55 @@ class MarineDataConfigurator:
             field_config = yaml_field_definitions[field_name]
             
             try:
-                # Core field mapping
-                conf_field = {
+                # Determine the module for this field
+                api_module = field_config.get('api_module', 'unknown_module')
+                
+                # Initialize module section if not exists
+                if api_module not in conf_mappings:
+                    conf_mappings[api_module] = {}
+                
+                # Get service field name (for nested structure)
+                service_field = field_config.get('service_field', field_name)
+                
+                # Core field mapping in nested structure
+                conf_mappings[api_module][service_field] = {
                     'database_field': field_config.get('database_field', field_name),
                     'database_type': field_config.get('database_type', 'REAL'),
                     'database_table': field_config.get('database_table', 'archive'),
-                    'unit_system': field_config.get('unit_system', 'METRIC'),
-                    'api_source': field_config.get('api_module', 'unknown')
+                    'api_path': field_config.get('api_path', ''),
+                    'unit_group': field_config.get('unit_group', 'group_count'),
+                    'api_product': field_config.get('api_product', 'default'),
+                    'description': field_config.get('description', f'Marine data field: {field_name}')
                 }
                 
-                # Add extended mapping information
-                if 'api_path' in field_config:
-                    conf_field['api_path'] = field_config['api_path']
-                
-                if 'unit_group' in field_config:
-                    conf_field['unit_group'] = field_config['unit_group']
-                
-                if 'conversion_factor' in field_config:
-                    conf_field['conversion_factor'] = str(field_config['conversion_factor'])
-                
-                if 'description' in field_config:
-                    conf_field['description'] = field_config['description']
-                
-                # Add data validation rules if present
-                if 'validation' in field_config:
-                    validation = field_config['validation']
-                    if 'min_value' in validation:
-                        conf_field['min_value'] = str(validation['min_value'])
-                    if 'max_value' in validation:
-                        conf_field['max_value'] = str(validation['max_value'])
-                
-                conf_mappings[field_name] = conf_field
-                
                 # Update statistics
-                api_source = conf_field['api_source'].lower()
+                api_source = api_module.lower()
                 if 'coops' in api_source:
                     field_stats['coops_fields'] += 1
                 elif 'ndbc' in api_source:
                     field_stats['ndbc_fields'] += 1
                 
-                if conf_field['database_table'] == 'archive':
+                database_table = field_config.get('database_table', 'archive')
+                if database_table == 'archive':
                     field_stats['archive_table'] += 1
                 else:
                     field_stats['marine_tables'] += 1
                 
-                if conf_field['database_type'] in ['REAL', 'INTEGER']:
+                database_type = field_config.get('database_type', 'REAL')
+                if database_type in ['REAL', 'INTEGER']:
                     field_stats['numeric_fields'] += 1
                 else:
                     field_stats['text_fields'] += 1
-                
+                    
             except Exception as e:
                 print(f"    ⚠️  Error transforming field '{field_name}': {e}")
                 continue
         
         # Display transformation summary
+        total_fields = sum(len(module_fields) for module_fields in conf_mappings.values())
         print(f"✅ Field transformation completed:")
-        print(f"    • Total fields: {len(conf_mappings)}")
+        print(f"    • Total fields: {total_fields}")
+        print(f"    • Modules: {list(conf_mappings.keys())}")
         print(f"    • CO-OPS fields: {field_stats['coops_fields']}")
         print(f"    • NDBC fields: {field_stats['ndbc_fields']}")
         print(f"    • Archive table: {field_stats['archive_table']}")
@@ -1411,8 +1404,8 @@ class MarineDataConfigurator:
         print(f"    • Text fields: {field_stats['text_fields']}")
         
         if not conf_mappings:
-            print("⚠️  No field mappings created - using fallback")
-            return self._get_fallback_field_mappings()
+            print("❌ CRITICAL ERROR: No field mappings created")
+            return {}
         
         return conf_mappings
     
