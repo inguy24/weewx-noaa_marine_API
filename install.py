@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Pacific Rattlesnake
+# Magic Animal: Western Diamondback Rattlesnake
 """
 WeeWX Marine Data Extension Installer
 
@@ -1225,7 +1225,6 @@ class MarineDataConfigurator:
                 selected_fields = complexity_config.get('fields', {})
             else:
                 # Create a simple UI instance for custom selection
-                from . import TerminalUI  # Import the UI class
                 ui = TerminalUI()
                 
                 print("\nStarting custom field selection interface...")
