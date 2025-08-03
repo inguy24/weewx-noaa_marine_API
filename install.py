@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Armadillo
+# Magic Animal: Pacific Rattlesnake
 """
 WeeWX Marine Data Extension Installer
 
@@ -587,6 +587,7 @@ class MarineDataConfigurator:
 
     def _curses_station_selection(self, stations, title, icon):
         """Curses-based station selection interface with user-friendly explanations and proper formatting."""
+        import curses
         
         def station_menu(stdscr):
             curses.curs_set(0)  # Hide cursor
@@ -643,10 +644,11 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
                 
-                # Station list
+                # Station list - FIX: Remove artificial 6-station limit, show up to 10 as intended
                 start_row = inst_row + 3
-                max_stations = min(6, max(1, (height - start_row - 3) // 2))
-                display_stations = stations[:max_stations] if stations else []
+                available_rows = max(1, (height - start_row - 3) // 2)
+                max_display = min(10, available_rows)  # Show up to 10 stations (design limit), not 6
+                display_stations = stations[:max_display] if stations else []
                 
                 for idx, station in enumerate(display_stations):
                     y = start_row + (idx * 2)
@@ -888,43 +890,71 @@ class MarineDataConfigurator:
   
     def _collect_field_selections(self):
         """Collect field selections based on YAML complexity levels."""
-        complexity_levels = self.yaml_data.get('complexity_levels', {})
+        print("\n🎯 FIELD SELECTION")
+        print("-" * 30)
         
-        print("Available field complexity levels:")
-        print("-" * 40)
-        
-        level_options = list(complexity_levels.keys())
-        for i, level in enumerate(level_options, 1):
-            level_info = complexity_levels[level]
-            description = level_info.get('description', 'No description')
-            estimated_fields = level_info.get('estimated_fields', 'Unknown')
-            print(f"{i}. {level.upper()}: {description}")
-            if estimated_fields != 'Unknown':
-                print(f"   (~{estimated_fields} fields)")
+        # Show complexity menu and get user choice
+        print("Field Selection Options:")
+        print("1. MINIMAL - Essential marine monitoring fields")
+        print("2. ALL - Complete marine dataset with all available fields") 
+        print("3. CUSTOM - Select specific fields manually")
         
         while True:
             try:
-                choice = input(f"\nSelect complexity level (1-{len(level_options)}): ").strip()
-                level_idx = int(choice) - 1
-                
-                if 0 <= level_idx < len(level_options):
-                    selected_level = level_options[level_idx]
-                    print(f"✅ Selected: {selected_level.upper()}")
-                    
-                    # Get fields for selected complexity level
-                    fields = self._get_fields_for_complexity(selected_level)
-                    return {
-                        'complexity_level': selected_level,
-                        'fields': fields
-                    }
+                choice = input("\nEnter choice [1-3]: ").strip()
+                if choice == '1':
+                    complexity_level = 'minimal'
+                    break
+                elif choice == '2':
+                    complexity_level = 'all'
+                    break
+                elif choice == '3':
+                    complexity_level = 'custom'
+                    break
                 else:
-                    print(f"❌ Please enter a number between 1 and {len(level_options)}")
-                    
-            except ValueError:
-                print("❌ Please enter a valid number.")
-            except KeyboardInterrupt:
-                print("\n\n⚠️  Setup cancelled by user.")
+                    print("Invalid choice. Please enter 1, 2, or 3.")
+            except (KeyboardInterrupt, EOFError):
+                print("\nInstallation cancelled by user.")
                 sys.exit(1)
+        
+        # Get fields based on complexity level
+        if complexity_level == 'minimal':
+            # Get minimal fields from YAML
+            complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
+            selected_fields = complexity_config.get('fields', {})
+        elif complexity_level == 'all':
+            # Get all fields from YAML
+            complexity_config = self.yaml_data.get('complexity_levels', {}).get('all', {})
+            selected_fields = complexity_config.get('fields', {})
+        elif complexity_level == 'custom':
+            # FIX: Actually execute custom selection instead of skipping
+            field_definitions = self.yaml_data.get('fields', {})
+            if not field_definitions:
+                print("Warning: No field definitions available. Using minimal defaults.")
+                complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
+                selected_fields = complexity_config.get('fields', {})
+            else:
+                # Create a simple UI instance for custom selection
+                from . import TerminalUI  # Import the UI class
+                ui = TerminalUI()
+                
+                print("\nStarting custom field selection interface...")
+                custom_selection = ui.show_custom_selection(field_definitions)
+                
+                # FIX: Don't fallback to defaults if user made a custom selection
+                if custom_selection is not None and len(custom_selection) > 0:
+                    selected_fields = custom_selection
+                elif custom_selection is None:
+                    print("Custom selection cancelled. Using minimal defaults.")
+                    complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
+                    selected_fields = complexity_config.get('fields', {})
+                else:
+                    print("No fields selected in custom mode. Using minimal defaults.")
+                    complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
+                    selected_fields = complexity_config.get('fields', {})
+        
+        print(f"✅ Selected {len(selected_fields)} fields for '{complexity_level}' complexity")
+        return selected_fields
     
     def _get_fields_for_complexity(self, complexity_level):
         """Get field list for specified complexity level with detailed processing."""
