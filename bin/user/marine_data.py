@@ -1787,48 +1787,18 @@ class MarineDataService(StdService):
         return selected_stations
     
     def _load_field_selection(self):
-        """
-        Load field selection from configuration.
+        """Extract selected fields from field_mappings - no redundancy."""
+        field_mappings = self.service_config.get('field_mappings', {})
         
-        Returns:
-            dict: Selected fields by module
-                {
-                    'coops_module': ['current_water_level', 'next_high_time'],
-                    'ndbc_module': ['wave_height', 'sea_surface_temp']
-                }
-        """
-        field_selection_config = self.service_config.get('field_selection', {})
-        
-        if not field_selection_config:
-            log.error("No field_selection section found in configuration")
-            return {}
-        
-        selected_fields_config = field_selection_config.get('selected_fields', {})
-        
-        if not selected_fields_config:
-            log.error("No selected_fields found in field_selection configuration")
+        if not field_mappings:
+            log.error("No field_mappings section found in configuration")
             return {}
         
         selected_fields = {}
+        for module_name, module_fields in field_mappings.items():
+            if isinstance(module_fields, dict):
+                selected_fields[module_name] = list(module_fields.keys())
         
-        for module_name, field_list in selected_fields_config.items():
-            if isinstance(field_list, list) and field_list:
-                selected_fields[module_name] = field_list
-                log.info(f"Loaded {len(field_list)} fields for module '{module_name}'")
-            elif isinstance(field_list, str) and field_list:
-                # Handle string format (comma-separated) as fallback
-                field_list_parsed = [f.strip() for f in field_list.split(',') if f.strip()]
-                if field_list_parsed:
-                    selected_fields[module_name] = field_list_parsed
-                    log.info(f"Loaded {len(field_list_parsed)} fields for module '{module_name}'")
-            else:
-                log.warning(f"Invalid field configuration for module '{module_name}': {field_list}")
-        
-        if not selected_fields:
-            log.error("No field selections found in configuration")
-            return {}
-        
-        log.info(f"Loaded field selection: {list(selected_fields.keys())}")
         return selected_fields
     
     def _validate_and_clean_selection(self):
