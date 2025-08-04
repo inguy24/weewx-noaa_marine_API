@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Rainbow Trout
+# Secret Animal: Sturgeon
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -614,8 +614,8 @@ class COOPSAPIClient:
             params = {
                 'product': 'predictions',
                 'station': station_id,
-                'begin_date': now.strftime('%Y%m%d %H:%M'),
-                'end_date': end_time.strftime('%Y%m%d %H:%M'),
+                'begin_date': now.strftime('%Y%m%d'),  # Date only, no time
+                'end_date': end_time.strftime('%Y%m%d'),  # Date only, no time
                 'format': 'json',
                 'units': 'english',
                 'time_zone': 'gmt',
