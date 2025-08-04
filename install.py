@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Manta Ray
+# Magic Animal: Mako Shark
 """
 WeeWX Marine Data Extension Installer
 
@@ -924,37 +924,50 @@ class MarineDataConfigurator:
                 print("\nInstallation cancelled by user.")
                 sys.exit(1)
         
+        # FIXED: Get fields from correct YAML structure - MUST exist
+        all_fields = self.yaml_data.get('fields', {})
+        if not all_fields:
+            print("❌ CRITICAL ERROR: No fields defined in YAML")
+            print("   The marine_data_fields.yaml file is missing the 'fields' section.")
+            print("   This is a package integrity issue.")
+            sys.exit(1)
+        
         # Get fields based on complexity level
         if complexity_level == 'minimal':
-            # Get minimal fields from YAML
-            complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
-            selected_fields = complexity_config.get('fields', {})
+            # Get only fields marked as minimal complexity
+            selected_fields = {}
+            for field_name, field_config in all_fields.items():
+                if field_config.get('complexity_level') == 'minimal':
+                    selected_fields[field_name] = field_config
         elif complexity_level == 'all':
-            # Get all fields from YAML
-            complexity_config = self.yaml_data.get('complexity_levels', {}).get('all', {})
-            selected_fields = complexity_config.get('fields', {})
+            # FIXED: Get ALL fields from the fields section
+            selected_fields = all_fields
         elif complexity_level == 'custom':
-            # FIX: Actually execute custom selection instead of skipping
-            field_definitions = self.yaml_data.get('fields', {})
-            if not field_definitions:
-                print("Warning: No field definitions available. Using minimal defaults.")
-                complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
-                selected_fields = complexity_config.get('fields', {})
+            # Execute custom selection interface
+            field_definitions = all_fields
+            print("\nStarting custom field selection interface...")
+            custom_selection = self.show_marine_custom_selection(field_definitions)
+            
+            if custom_selection is not None and len(custom_selection) > 0:
+                selected_fields = custom_selection
+            elif custom_selection is None:
+                print("Custom selection cancelled. Using minimal defaults.")
+                selected_fields = {}
+                for field_name, field_config in all_fields.items():
+                    if field_config.get('complexity_level') == 'minimal':
+                        selected_fields[field_name] = field_config
             else:
-                print("\nStarting custom field selection interface...")
-                custom_selection = self.show_marine_custom_selection(field_definitions)
-                
-                # FIX: Don't fallback to defaults if user made a custom selection
-                if custom_selection is not None and len(custom_selection) > 0:
-                    selected_fields = custom_selection
-                elif custom_selection is None:
-                    print("Custom selection cancelled. Using minimal defaults.")
-                    complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
-                    selected_fields = complexity_config.get('fields', {})
-                else:
-                    print("No fields selected in custom mode. Using minimal defaults.")
-                    complexity_config = self.yaml_data.get('complexity_levels', {}).get('minimal', {})
-                    selected_fields = complexity_config.get('fields', {})
+                print("No fields selected in custom mode. Using minimal defaults.")
+                selected_fields = {}
+                for field_name, field_config in all_fields.items():
+                    if field_config.get('complexity_level') == 'minimal':
+                        selected_fields[field_name] = field_config
+        
+        if not selected_fields:
+            print("❌ CRITICAL ERROR: No fields selected")
+            print(f"   No fields found for complexity level '{complexity_level}'")
+            print("   This indicates a problem with the YAML field definitions.")
+            sys.exit(1)
         
         print(f"✅ Selected {len(selected_fields)} fields for '{complexity_level}' complexity")
         return selected_fields
