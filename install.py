@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Eel
+# Magic Animal: Moray Eel
 """
 WeeWX Marine Data Extension Installer
 
@@ -333,10 +333,10 @@ class MarineDataConfigurator:
 
     def _query_station_datum(self, station_id):
         """
-        Query CO-OPS station metadata API to determine the station's reference datum.
+        Query CO-OPS station datums API to get the station's orthometric datum.
         
-        ADDITION: New method to get station-specific datum information from YAML-driven API.
-        Uses YAML configuration for metadata URL and valid datums list.
+        REPLACEMENT: Trusts NOAA completely - uses whatever orthometric datum they specify.
+        No "valid datums" filtering - NOAA knows their data better than we do.
         """
         try:
             # Get API configuration from YAML
@@ -346,45 +346,53 @@ class MarineDataConfigurator:
             # Get metadata API URL from YAML
             metadata_base_url = coops_module.get('metadata_api_url', '')
             if not metadata_base_url:
-                print(f"    ⚠️  No metadata_api_url in YAML for station {station_id}, using MLLW")
-                return 'MLLW'
+                print(f"    ❌ No metadata_api_url in YAML for station {station_id}")
+                return None
             
-            # Build metadata URL for specific station
-            metadata_url = f"{metadata_base_url.rstrip('/')}/{station_id}.json"
+            # Build datums URL for specific station
+            datums_url = f"{metadata_base_url.rstrip('/')}/{station_id}/datums.json"
             
-            # Get valid datums from YAML
-            valid_datums = coops_module.get('valid_datums', ['MLLW'])
-            default_datum = coops_module.get('default_datum', 'MLLW')
-            
-            request = urllib.request.Request(metadata_url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
+            request = urllib.request.Request(datums_url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
             with urllib.request.urlopen(request, timeout=10) as response:
                 if response.getcode() != 200:
-                    return default_datum
+                    print(f"    ❌ HTTP {response.getcode()} for station {station_id} datums")
+                    return None
                 
-                metadata = json.loads(response.read().decode('utf-8'))
+                response_text = response.read().decode('utf-8')
+                datums_data = json.loads(response_text)
                 
-                # Extract datum information from station metadata
-                stations = metadata.get('stations', [])
-                if stations and len(stations) > 0:
-                    station_data = stations[0]
-                    
-                    # Get datum field name from YAML
-                    datum_field = coops_module.get('metadata_datum_field', 'referenceDatum')
-                    reference_datum = station_data.get(datum_field, default_datum)
-                    
-                    # Validate datum is in YAML valid list
-                    if reference_datum in valid_datums:
-                        return reference_datum
-                    else:
-                        return default_datum
+                # Get the station's orthometric datum (NOAA's recommended reference)
+                orthometric_datum = datums_data.get('OrthometricDatum', '')
+                
+                if orthometric_datum:
+                    print(f"    ✅ NOAA recommends datum: {orthometric_datum}")
+                    return orthometric_datum
                 else:
-                    return default_datum
+                    print(f"    ❌ No OrthometricDatum specified by NOAA for station {station_id}")
+                    # Still trust NOAA - check if MLLW is available as backup
+                    datums_list = datums_data.get('datums', [])
+                    available_datums = [d.get('name', '') for d in datums_list]
+                    if 'MLLW' in available_datums:
+                        print(f"    🔄 NOAA provides MLLW - using as standard marine datum")
+                        return 'MLLW'
+                    elif available_datums:
+                        # Use the first available datum NOAA provides
+                        fallback_datum = available_datums[0]
+                        print(f"    🔄 Using first available NOAA datum: {fallback_datum}")
+                        return fallback_datum
+                    else:
+                        print(f"    ❌ No datums available from NOAA for station {station_id}")
+                        return None
                     
+        except urllib.error.HTTPError as e:
+            print(f"    ❌ HTTP Error {e.code} for station {station_id}: {e.reason}")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"    ❌ JSON decode error for station {station_id}: {e}")
+            return None
         except Exception as e:
-            # Get fallback datum from YAML
-            default_datum = self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('default_datum', 'MLLW')
-            print(f"    ⚠️  Could not determine datum for station {station_id}, using {default_datum}")
-            return default_datum
+            print(f"    ❌ Could not query datum for station {station_id}: {e}")
+            return None
 
     def _process_coops_stations(self, stations, user_lat, user_lon, max_distance_km, station_type):
         """Process CO-OPS stations and filter by distance."""
@@ -415,22 +423,27 @@ class MarineDataConfigurator:
                     
                     station_datum = self._query_station_datum(station_id)
                     
-                    station_info = {
-                        'id': station_id,
-                        'name': name,
-                        'lat': lat,
-                        'lon': lon,
-                        'distance_km': distance_km,
-                        'bearing': bearing_deg,
-                        'bearing_text': bearing_text,
-                        'state': state,
-                        'capabilities': capabilities,
-                        'type': 'coops',
-                        'station_type': station_type,
-                        'datum': station_datum  # Store station-specific datum from YAML-driven query
-                    }
-                    print(f"    📍 {station_id}: Using datum {station_datum}")
-                    processed_stations.append(station_info)
+                    # Only include stations where NOAA provides datum information
+                    if station_datum:
+                        station_info = {
+                            'id': station_id,
+                            'name': name,
+                            'lat': lat,
+                            'lon': lon,
+                            'distance_km': distance_km,
+                            'bearing': bearing_deg,
+                            'bearing_text': bearing_text,
+                            'state': state,
+                            'capabilities': capabilities,
+                            'type': 'coops',
+                            'station_type': station_type,
+                            'datum': station_datum  # Store NOAA-provided datum
+                        }
+                        
+                        print(f"    📍 {station_id}: Using NOAA datum {station_datum}")
+                        processed_stations.append(station_info)
+                    else:
+                        print(f"    🚫 Excluding {station_id} - no datum information from NOAA")
                     
             except (ValueError, KeyError, TypeError):
                 continue  # Skip invalid stations
