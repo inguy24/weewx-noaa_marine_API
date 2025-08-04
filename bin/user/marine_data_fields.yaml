@@ -1,7 +1,3 @@
-# MARINE DATA EXTENSION - CONSOLIDATED YAML CONFIGURATION
-# Single source of truth - NO DUPLICATION
-
-# PRIORITY 1: API modules with ALL endpoints in ONE place
 api_modules:
   coops_module:
     display_name: "NOAA CO-OPS (Tides & Currents)"
@@ -9,6 +5,18 @@ api_modules:
     api_url: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
     metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail"
     station_info_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}.json"
+    metadata_api_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations"
+    metadata_datum_field: "referenceDatum"
+    default_datum: "MLLW"
+    valid_datums: ["MLLW", "MSL", "NAVD88", "STND", "IGLD"]
+    default_products: "water_level,predictions,water_temperature"
+    default_units: "metric"
+    default_timezone: "gmt"
+    product_parameters:
+      predictions:
+        interval: "hilo"
+      water_level:
+        interval: "6"
     recommended_interval: 600
     timeout: 30
     retry_attempts: 3
@@ -27,7 +35,6 @@ api_modules:
     config_module_name: "ndbc"
     interval_config_name: "ndbc_collection_interval"
 
-# PRIORITY 2: Complexity levels for field selection
 complexity_levels:
   minimal:
     description: "Essential marine data for basic coastal monitoring"
@@ -51,7 +58,6 @@ complexity_levels:
     recommended_for: "Specialized applications, specific monitoring requirements"
     coverage: "Varies based on user selection"
 
-# PRIORITY 3: Complete field definitions organized by API module
 fields:
   # CO-OPS Module Fields
   current_water_level:
@@ -276,7 +282,6 @@ fields:
     api_product: "stdmet"
     description: "Sea surface water temperature"
 
-# PRIORITY 4: Database configuration
 database_schemas:
   coops_data:
     description: "High-frequency CO-OPS data (6-minute updates)"
@@ -297,7 +302,6 @@ database_schemas:
       - ["data_type"]
       - ["dateTime", "station_id"]
 
-# PRIORITY 5: Configuration mappings
 config_mappings:
   yaml_to_config:
     coops_module: "coops"
