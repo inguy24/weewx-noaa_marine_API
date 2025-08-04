@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Sturgeon
+# Secret Animal: Blue Crab
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -624,6 +624,8 @@ class COOPSAPIClient:
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
+            
+            log.error(f"DEBUG: CO-OPS URL for {station_id}: {url}")
             
             with urllib.request.urlopen(url, timeout=self.timeout) as response:
                 if response.getcode() != 200:
