@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Moray Eel
+# Magic Animal: Tarantula
 """
 WeeWX Marine Data Extension Installer
 
@@ -18,6 +18,10 @@ Author: Shane Burkhardt
 """
 
 import os
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
 import sys
 import subprocess
 import sqlite3
