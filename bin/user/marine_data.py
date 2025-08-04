@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Angler Fish
+# Secret Animal: Rainbow Trout
 """
 WeeWX Marine Data Extension - Core Service Framework
 
