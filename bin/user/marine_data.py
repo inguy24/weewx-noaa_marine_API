@@ -586,9 +586,7 @@ class COOPSAPIClient:
             else:
                 raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
                                        error_type='api_error', station_id=station_id, api_source='coops')
-        except urllib.error.URLError as e:
-            raise MarineDataAPIError(f"CO-OPS network error: {e.reason}",
-                                   error_type='network_error', station_id=station_id, api_source='coops')
+
         except socket.timeout:
             raise MarineDataAPIError("CO-OPS request timeout",
                                    error_type='timeout', station_id=station_id, api_source='coops')
