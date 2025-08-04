@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Sting Ray
+# Magic Animal: Manta Ray
 """
 WeeWX Marine Data Extension Installer
 
@@ -1194,34 +1194,20 @@ class MarineDataConfigurator:
         return config_dict
     
     def _generate_station_configuration(self, coops_stations, ndbc_stations):
-        """Generate detailed station configuration section."""
+        """Generate station configuration section - simple format for service runtime."""
         station_config = {}
         
         if coops_stations:
             station_config['coops_stations'] = {}
             for station in coops_stations:
-                station_config['coops_stations'][station['id']] = {
-                    'enable': 'true',
-                    'name': station['name'],
-                    'latitude': str(station['lat']),
-                    'longitude': str(station['lon']),
-                    'distance_km': str(round(station['distance_km'], 2)),
-                    'state': station.get('state', 'Unknown'),
-                    'capabilities': ','.join(station.get('capabilities', ['Water Level']))
-                }
+                # FIXED: Simple format - station_id = true (not detailed metadata)
+                station_config['coops_stations'][station['id']] = 'true'
         
         if ndbc_stations:
             station_config['ndbc_stations'] = {}
             for station in ndbc_stations:
-                station_config['ndbc_stations'][station['id']] = {
-                    'enable': 'true',
-                    'name': station['name'],
-                    'latitude': str(station['lat']),
-                    'longitude': str(station['lon']),
-                    'distance_km': str(round(station['distance_km'], 2)),
-                    'station_type': station.get('station_type', 'buoy'),
-                    'capabilities': ','.join(station.get('capabilities', ['Marine Weather']))
-                }
+                # FIXED: Simple format - station_id = true (not detailed metadata)
+                station_config['ndbc_stations'][station['id']] = 'true'
         
         return station_config
     
