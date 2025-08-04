@@ -1,5 +1,5 @@
 #!/usr/bin/env python3\
-# Magic Animal: Mako Shark
+# Magic Animal: Eel
 """
 WeeWX Marine Data Extension Installer
 
@@ -331,6 +331,61 @@ class MarineDataConfigurator:
             print(f"  ❌ CO-OPS station discovery failed: {e}")
             return []
 
+    def _query_station_datum(self, station_id):
+        """
+        Query CO-OPS station metadata API to determine the station's reference datum.
+        
+        ADDITION: New method to get station-specific datum information from YAML-driven API.
+        Uses YAML configuration for metadata URL and valid datums list.
+        """
+        try:
+            # Get API configuration from YAML
+            api_modules = self.yaml_data.get('api_modules', {})
+            coops_module = api_modules.get('coops_module', {})
+            
+            # Get metadata API URL from YAML
+            metadata_base_url = coops_module.get('metadata_api_url', '')
+            if not metadata_base_url:
+                print(f"    ⚠️  No metadata_api_url in YAML for station {station_id}, using MLLW")
+                return 'MLLW'
+            
+            # Build metadata URL for specific station
+            metadata_url = f"{metadata_base_url.rstrip('/')}/{station_id}.json"
+            
+            # Get valid datums from YAML
+            valid_datums = coops_module.get('valid_datums', ['MLLW'])
+            default_datum = coops_module.get('default_datum', 'MLLW')
+            
+            request = urllib.request.Request(metadata_url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.getcode() != 200:
+                    return default_datum
+                
+                metadata = json.loads(response.read().decode('utf-8'))
+                
+                # Extract datum information from station metadata
+                stations = metadata.get('stations', [])
+                if stations and len(stations) > 0:
+                    station_data = stations[0]
+                    
+                    # Get datum field name from YAML
+                    datum_field = coops_module.get('metadata_datum_field', 'referenceDatum')
+                    reference_datum = station_data.get(datum_field, default_datum)
+                    
+                    # Validate datum is in YAML valid list
+                    if reference_datum in valid_datums:
+                        return reference_datum
+                    else:
+                        return default_datum
+                else:
+                    return default_datum
+                    
+        except Exception as e:
+            # Get fallback datum from YAML
+            default_datum = self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('default_datum', 'MLLW')
+            print(f"    ⚠️  Could not determine datum for station {station_id}, using {default_datum}")
+            return default_datum
+
     def _process_coops_stations(self, stations, user_lat, user_lon, max_distance_km, station_type):
         """Process CO-OPS stations and filter by distance."""
         processed_stations = []
@@ -358,6 +413,8 @@ class MarineDataConfigurator:
                     else:  # reference station
                         capabilities = ['Tide Predictions', 'Reference Station']
                     
+                    station_datum = self._query_station_datum(station_id)
+                    
                     station_info = {
                         'id': station_id,
                         'name': name,
@@ -369,8 +426,10 @@ class MarineDataConfigurator:
                         'state': state,
                         'capabilities': capabilities,
                         'type': 'coops',
-                        'station_type': station_type
+                        'station_type': station_type,
+                        'datum': station_datum  # Store station-specific datum from YAML-driven query
                     }
+                    print(f"    📍 {station_id}: Using datum {station_datum}")
                     processed_stations.append(station_info)
                     
             except (ValueError, KeyError, TypeError):
@@ -1225,17 +1284,43 @@ class MarineDataConfigurator:
         return station_config
     
     def _generate_coops_module_config(self, coops_stations, intervals):
-        """Generate CO-OPS module configuration."""
+        """
+        Generate CO-OPS module configuration with per-station datum support from YAML.
+        
+        REPLACEMENT: Enhanced to store datum per station using YAML-driven configuration.
+        All API settings and defaults come from YAML field definitions.
+        """
+        # Get CO-OPS module configuration from YAML
+        api_modules = self.yaml_data.get('api_modules', {})
+        coops_module = api_modules.get('coops_module', {})
+        
         coops_config = {
             'enable': 'true' if coops_stations else 'false',
             'interval': str(intervals.get('coops_module', 600)),
-            'api_url': self.yaml_data.get('api_modules', {}).get('coops_module', {}).get('api_url'),
-            'stations': ','.join([s['id'] for s in coops_stations]),
-            'products': 'water_level,predictions,water_temperature',  # Default products
-            'datum': 'MLLW',  # Mean Lower Low Water
-            'units': 'metric',
-            'time_zone': 'gmt'
+            'api_url': coops_module.get('api_url', ''),
+            'products': coops_module.get('default_products', 'water_level,predictions,water_temperature'),
+            'units': coops_module.get('default_units', 'metric'),
+            'time_zone': coops_module.get('default_timezone', 'gmt')
         }
+        
+        # Store per-station configuration including datum from YAML-driven discovery
+        if coops_stations:
+            station_configs = {}
+            default_datum = coops_module.get('default_datum', 'MLLW')
+            
+            for station in coops_stations:
+                station_id = station['id']
+                station_datum = station.get('datum', default_datum)  # Use YAML-discovered datum
+                
+                station_configs[station_id] = {
+                    'enabled': 'true',
+                    'datum': station_datum,
+                    'name': station.get('name', 'Unknown'),
+                    'distance_km': str(station.get('distance_km', 0))
+                }
+            
+            coops_config['stations'] = ','.join([s['id'] for s in coops_stations])
+            coops_config['station_configs'] = station_configs
         
         return coops_config
     
