@@ -426,9 +426,25 @@ class StationManager:
         """
         try:
             # Test with a simple water level request for last hour
-            url = (f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
-                   f"?product=water_level&station={station_id}&date=latest"
-                   f"&format=json&units=english&time_zone=gmt")
+            # Use COOPSAPIClient to build proper URL with configuration-driven parameters
+            coops_client = COOPSAPIClient(timeout=10, config_dict=self.config_dict)
+            
+            # Build test parameters using configuration
+            service_config = self.config_dict.get('MarineDataService', {}) if self.config_dict else {}
+            coops_config = service_config.get('coops_module', {})
+            base_url = coops_config.get('api_url', 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter')
+            
+            params = {
+                'product': 'water_level',
+                'station': station_id,
+                'date': 'latest',
+                'format': 'json',
+                'units': 'english',
+                'time_zone': 'gmt',
+                'datum': coops_client._get_station_datum(station_id)  # Use station-specific datum
+            }
+            
+            url = base_url + '?' + urllib.parse.urlencode(params)
             
             with urllib.request.urlopen(url, timeout=10) as response:
                 if response.getcode() == 200:
@@ -501,28 +517,33 @@ class COOPSAPIClient:
         """
         Get the appropriate datum for a specific CO-OPS station from configuration.
         
+        REPLACEMENT: Updated to work with install.py datum discovery system.
+        Uses per-station datum from configuration with YAML-driven fallbacks.
+        
         Args:
             station_id (str): CO-OPS station identifier
             
         Returns:
-            str: Datum code for the station (e.g., 'STND', 'MLLW', 'MSL')
+            str: Datum code for the station (e.g., 'MLLW', 'NAVD88', 'MSL')
         """
         if not self.config_dict:
-            # Fallback to STND if no config available
-            return 'STND'
-        
+            return 'MLLW'  # Fallback if no config available
+            
         service_config = self.config_dict.get('MarineDataService', {})
-        selected_stations = service_config.get('selected_stations', {})
-        coops_stations = selected_stations.get('coops_stations', {})
+        coops_config = service_config.get('coops_module', {})
+        station_configs = coops_config.get('station_configs', {})
         
-        # Look for station-specific datum in configuration
-        station_datum_key = f"{station_id}_datum"
-        if station_datum_key in coops_stations:
-            return coops_stations[station_datum_key]
-        
-        # Fallback to STND (most universally supported)
-        log.debug(f"No datum specified for station {station_id}, using STND")
-        return 'STND'
+        # Get datum for specific station from install.py datum discovery
+        station_config = station_configs.get(station_id, {})
+        if 'datum' in station_config:
+            station_datum = station_config['datum']
+            log.debug(f"Using configured datum {station_datum} for CO-OPS station {station_id}")
+            return station_datum
+        else:
+            # Fallback to service-level default (comes from YAML)
+            default_datum = coops_config.get('default_datum', 'MLLW')
+            log.debug(f"No datum specified for station {station_id}, using default {default_datum}")
+            return default_datum
     
     def collect_water_level(self, station_id, hours_back=1):
         """
@@ -542,7 +563,7 @@ class COOPSAPIClient:
                 'format': 'json',
                 'units': 'english',
                 'time_zone': 'gmt',
-                'datum': datum  # FIXED: Use station-specific datum from config
+                'datum': self._get_station_datum(station_id)  # Use station-specific datum
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
@@ -599,7 +620,7 @@ class COOPSAPIClient:
                 'units': 'english',
                 'time_zone': 'gmt',
                 'interval': 'hilo',  # High/low tides only
-                'datum': datum  # FIXED: Use station-specific datum from config
+                'datum': self._get_station_datum(station_id)  # Use station-specific datum
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
@@ -649,7 +670,8 @@ class COOPSAPIClient:
                 'date': 'latest',
                 'format': 'json',
                 'units': 'english',
-                'time_zone': 'gmt'
+                'time_zone': 'gmt',
+                'datum': self._get_station_datum(station_id)  # Use station-specific datum
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
