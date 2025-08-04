@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Flamingo
+# Secret Animal: Garter Snake
 """
 WeeWX Marine Data Extension - Core Service Framework
 
