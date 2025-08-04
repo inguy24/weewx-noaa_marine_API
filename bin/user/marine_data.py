@@ -626,7 +626,10 @@ class COOPSAPIClient:
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
             log.error(f"DEBUG: CO-OPS URL for {station_id}: {url}")
-            
+
+            # Add User-Agent header like curl
+            request = urllib.request.Request(url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
+
             with urllib.request.urlopen(url, timeout=self.timeout) as response:
                 if response.getcode() != 200:
                     raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
@@ -636,12 +639,24 @@ class COOPSAPIClient:
                 return self._process_tide_predictions(data, station_id)
                 
         except urllib.error.HTTPError as e:
+            # Enhanced debugging for HTTP errors
+            log.error(f"DEBUG: HTTP Error details - Code: {e.code}, Reason: {e.reason}")
+            log.error(f"DEBUG: Failed URL: {url}")
+            
+            # Try to read error response body
+            try:
+                error_response = e.read().decode('utf-8')
+                log.error(f"DEBUG: Error response body: {error_response[:500]}")
+            except:
+                log.error("DEBUG: Could not read error response body")
+            
             if e.code == 404:
                 raise MarineDataAPIError(f"CO-OPS station {station_id} predictions not available",
                                     error_type='station_not_found', station_id=station_id, api_source='coops')
             else:
                 raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
                                     error_type='api_error', station_id=station_id, api_source='coops')
+            
         except Exception as e:
             raise MarineDataAPIError(f"CO-OPS tide prediction error: {e}",
                                     error_type='api_error', station_id=station_id, api_source='coops')
