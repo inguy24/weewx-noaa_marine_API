@@ -628,7 +628,7 @@ class COOPSAPIClient:
             # Add User-Agent header like curl
             request = urllib.request.Request(url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
 
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if response.getcode() != 200:
                     raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
                                         error_type='api_error', station_id=station_id, api_source='coops')
