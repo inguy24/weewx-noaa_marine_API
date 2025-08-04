@@ -8,7 +8,6 @@ api_modules:
     metadata_api_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations"
     metadata_datum_field: "referenceDatum"
     default_datum: "MLLW"
-    valid_datums: ["MLLW", "MSL", "NAVD88", "STND", "IGLD"]
     default_products: "water_level,predictions,water_temperature"
     default_units: "metric"
     default_timezone: "gmt"
