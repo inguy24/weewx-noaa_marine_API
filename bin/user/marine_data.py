@@ -496,27 +496,43 @@ class COOPSAPIClient:
         self.min_request_interval = 5  # Minimum 5 seconds between requests
         
         log.info("CO-OPS API client initialized")
+
+    def _get_station_datum(self, station_id):
+        """
+        Get the appropriate datum for a specific CO-OPS station from configuration.
+        
+        Args:
+            station_id (str): CO-OPS station identifier
+            
+        Returns:
+            str: Datum code for the station (e.g., 'STND', 'MLLW', 'MSL')
+        """
+        if not self.config_dict:
+            # Fallback to STND if no config available
+            return 'STND'
+        
+        service_config = self.config_dict.get('MarineDataService', {})
+        selected_stations = service_config.get('selected_stations', {})
+        coops_stations = selected_stations.get('coops_stations', {})
+        
+        # Look for station-specific datum in configuration
+        station_datum_key = f"{station_id}_datum"
+        if station_datum_key in coops_stations:
+            return coops_stations[station_datum_key]
+        
+        # Fallback to STND (most universally supported)
+        log.debug(f"No datum specified for station {station_id}, using STND")
+        return 'STND'
     
     def collect_water_level(self, station_id, hours_back=1):
         """
         Collect current water level observations from CO-OPS station.
-        
-        Args:
-            station_id (str): CO-OPS station identifier
-            hours_back (int): Hours of data to retrieve
-            
-        Returns:
-            dict: Processed water level data or None if failed
-                {
-                    'station_id': '9410230',
-                    'water_level': 2.45,
-                    'sigma': 0.02,
-                    'flags': 'verified',
-                    'timestamp': '2025-01-31T20:42:00Z'
-                }
         """
         try:
             self._enforce_rate_limit()
+            
+            # Get station-specific datum from configuration
+            datum = self._get_station_datum(station_id)
             
             # Build CO-OPS water level API request
             params = {
@@ -525,7 +541,8 @@ class COOPSAPIClient:
                 'date': 'latest',
                 'format': 'json',
                 'units': 'english',
-                'time_zone': 'gmt'
+                'time_zone': 'gmt',
+                'datum': datum  # FIXED: Use station-specific datum from config
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
@@ -557,22 +574,18 @@ class COOPSAPIClient:
         except json.JSONDecodeError as e:
             raise MarineDataAPIError(f"CO-OPS invalid JSON response: {e}",
                                    error_type='invalid_response', station_id=station_id, api_source='coops')
-    
+        
     def collect_tide_predictions(self, station_id, hours_ahead=48):
         """
         Collect tide predictions from CO-OPS station.
-        
-        Args:
-            station_id (str): CO-OPS station identifier
-            hours_ahead (int): Hours of predictions to retrieve
-            
-        Returns:
-            dict: Processed tide prediction data or None if failed
         """
         try:
             self._enforce_rate_limit()
             
-            # FIXED: Calculate prediction time range using timedelta
+            # Get station-specific datum from configuration
+            datum = self._get_station_datum(station_id)
+            
+            # Calculate prediction time range using timedelta
             from datetime import timedelta
             now = datetime.now(timezone.utc)
             end_time = now + timedelta(hours=hours_ahead)
@@ -585,7 +598,8 @@ class COOPSAPIClient:
                 'format': 'json',
                 'units': 'english',
                 'time_zone': 'gmt',
-                'interval': 'hilo'  # High/low tides only
+                'interval': 'hilo',  # High/low tides only
+                'datum': datum  # FIXED: Use station-specific datum from config
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
