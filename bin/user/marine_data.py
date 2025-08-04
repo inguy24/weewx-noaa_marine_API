@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Garter Snake
+# Secret Animal: Swordfish
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -1395,15 +1395,15 @@ class COOPSBackgroundThread(threading.Thread):
                 else:
                     collected_data.append(water_temp_data)
             
-        # Store in thread-safe manner (following OpenWeather pattern)
-        if collected_data:
-            with self.data_lock:
-                self.latest_data[station_id] = collected_data
-            
-            log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
-            if log_success:
-                log.info(f"Collected CO-OPS data from station {station_id}: {len(collected_data)} records")
-            
+            # Store in thread-safe manner (following OpenWeather pattern)
+            if collected_data:
+                with self.data_lock:
+                    self.latest_data[station_id] = collected_data
+                
+                log_success = str(self.config.get('log_success', 'false')).lower() in ('true', 'yes', '1')
+                if log_success:
+                    log.info(f"Collected CO-OPS data from station {station_id}: {len(collected_data)} records")
+                    
         except MarineDataAPIError as e:
             log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
             if log_errors:
