@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Swordfish
+# Secret Animal: Angler Fish
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -568,21 +568,14 @@ class COOPSAPIClient:
             
         Returns:
             dict: Processed tide prediction data or None if failed
-                {
-                    'station_id': '9410230',
-                    'next_high_time': '2025-02-01T02:15:00Z',
-                    'next_high_height': 6.23,
-                    'next_low_time': '2025-02-01T08:42:00Z',
-                    'next_low_height': -0.45,
-                    'tidal_range': 6.68
-                }
         """
         try:
             self._enforce_rate_limit()
             
-            # Calculate prediction time range
+            # FIXED: Calculate prediction time range using timedelta
+            from datetime import timedelta
             now = datetime.now(timezone.utc)
-            end_time = now.replace(hour=now.hour + hours_ahead, minute=0, second=0, microsecond=0)
+            end_time = now + timedelta(hours=hours_ahead)
             
             params = {
                 'product': 'predictions',
@@ -600,7 +593,7 @@ class COOPSAPIClient:
             with urllib.request.urlopen(url, timeout=self.timeout) as response:
                 if response.getcode() != 200:
                     raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
-                                           error_type='api_error', station_id=station_id, api_source='coops')
+                                        error_type='api_error', station_id=station_id, api_source='coops')
                 
                 data = json.loads(response.read().decode('utf-8'))
                 return self._process_tide_predictions(data, station_id)
@@ -608,13 +601,13 @@ class COOPSAPIClient:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise MarineDataAPIError(f"CO-OPS station {station_id} predictions not available",
-                                       error_type='station_not_found', station_id=station_id, api_source='coops')
+                                    error_type='station_not_found', station_id=station_id, api_source='coops')
             else:
                 raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
-                                       error_type='api_error', station_id=station_id, api_source='coops')
+                                    error_type='api_error', station_id=station_id, api_source='coops')
         except Exception as e:
             raise MarineDataAPIError(f"CO-OPS tide prediction error: {e}",
-                                   error_type='api_error', station_id=station_id, api_source='coops')
+                                    error_type='api_error', station_id=station_id, api_source='coops')
     
     def collect_water_temperature(self, station_id, hours_back=1):
         """
