@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Meercat
+# Secret Animal: Ocelot
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -1442,18 +1442,31 @@ class COOPSBackgroundThread(threading.Thread):
             try:
                 current_time = time.time()
                 
+                log.debug(f"CO-OPS thread check: {len(self.selected_stations)} stations, running={self.running}")
+                
                 # Collect from each selected station
                 for station_id in self.selected_stations:
-                    if (current_time - self.last_collection[station_id] >= self.collection_interval):
-                        self._collect_station_data(station_id)
-                        self.last_collection[station_id] = current_time
+                    try:
+                        if (current_time - self.last_collection[station_id] >= self.collection_interval):
+                            log.debug(f"CO-OPS thread collecting from station {station_id}")
+                            self._collect_station_data(station_id)
+                            self.last_collection[station_id] = current_time
+                        else:
+                            time_remaining = self.collection_interval - (current_time - self.last_collection[station_id])
+                            log.debug(f"CO-OPS station {station_id}: {time_remaining:.0f}s until next collection")
+                    except Exception as e:
+                        log.error(f"CRITICAL: Error in CO-OPS collection loop for station {station_id}: {e}")
+                        import traceback
+                        log.error(f"CRITICAL: Full traceback: {traceback.format_exc()}")
                 
-                # Sleep for 1 minute before checking again
+                # Sleep for 1 minute before checking again  
                 time.sleep(60)
                 
             except Exception as e:
-                log.error(f"Error in CO-OPS background thread: {e}")
-                time.sleep(300)  # Sleep 5 minutes on error
+                log.error(f"CRITICAL: Error in CO-OPS background thread main loop: {e}")
+                import traceback
+                log.error(f"CRITICAL: Full traceback: {traceback.format_exc()}")
+                time.sleep(60)  # Reduced from 300 seconds
     
     def _collect_station_data(self, station_id):
         """
@@ -1604,11 +1617,11 @@ class MarineBackgroundThread(threading.Thread):
                 self._collect_ndbc_data(current_time)
                 
                 # Sleep for 5 minutes before checking again
-                time.sleep(300)
+                time.sleep(60)
                 
             except Exception as e:
                 log.error(f"Error in marine background thread: {e}")
-                time.sleep(600)  # Sleep 10 minutes on error
+                time.sleep(120)  # Sleep 10 minutes on error
     
     def _collect_tide_predictions(self, current_time):
         """
