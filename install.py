@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Golden Orb Weaver
+# Magic Animal: Llama
 """
 WeeWX Marine Data Extension Installer - ARCHITECTURE CORRECTED
 
@@ -307,9 +307,12 @@ class MarineDataConfigurator:
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
         """
         Discover CO-OPS stations including both observation and reference stations.
-        This fixes the Newport Beach Harbor (9410580) missing issue.
+        FIXED: Proper limiting to 10 stations within 250km max.
         """
         all_stations = []
+        
+        # Apply hard distance limit of 250km max
+        search_distance = min(max_distance_km, 250)
         
         # Get URLs from YAML configuration
         api_modules = self.yaml_data.get('api_modules', {})
@@ -325,9 +328,49 @@ class MarineDataConfigurator:
             obs_data = response.json()
             obs_stations = obs_data.get('stations', [])
             
-            # Process observation stations
-            processed_obs = self._process_coops_stations(obs_stations, user_lat, user_lon, max_distance_km, 'observation')
-            all_stations.extend(processed_obs)
+            # Process observation stations with distance filtering
+            for station in obs_stations:
+                try:
+                    station_id = station.get('id', '')
+                    lat = float(station.get('lat', 0))
+                    lon = float(station.get('lng', 0))  # CO-OPS uses 'lng'
+                    name = station.get('name', 'Unknown Station')
+                    state = station.get('state', 'Unknown')
+                    
+                    # Calculate distance
+                    distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    
+                    # Apply distance filter immediately
+                    if distance_km <= search_distance:
+                        bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                        bearing_text = self._bearing_to_text(bearing_deg)
+                        
+                        capabilities = ['Water Level', 'Real-time Data']
+                        if station.get('tidal', False):
+                            capabilities.append('Tide Predictions')
+                        
+                        station_datum = self._query_station_datum(station_id)
+                        
+                        if station_datum:  # Only include stations with datum info
+                            station_info = {
+                                'id': station_id,
+                                'name': name,
+                                'lat': lat,
+                                'lon': lon,
+                                'distance_km': distance_km,
+                                'bearing': bearing_deg,
+                                'bearing_text': bearing_text,
+                                'state': state,
+                                'capabilities': capabilities,
+                                'type': 'coops',
+                                'station_type': 'observation',
+                                'datum': station_datum
+                            }
+                            all_stations.append(station_info)
+                            print(f"    📍 {station_id}: {distance_km:.1f}km, datum {station_datum}")
+                            
+                except (ValueError, KeyError, TypeError):
+                    continue
             
             # Query reference stations (for tide predictions)
             ref_url = obs_url.replace('expand=detail', 'type=tidepredictions')
@@ -338,11 +381,58 @@ class MarineDataConfigurator:
             ref_data = response.json()
             ref_stations = ref_data.get('stations', [])
             
-            # Process reference stations
-            processed_ref = self._process_coops_stations(ref_stations, user_lat, user_lon, max_distance_km, 'reference')
-            all_stations.extend(processed_ref)
+            # Process reference stations with distance filtering
+            for station in ref_stations:
+                try:
+                    station_id = station.get('id', '')
+                    lat = float(station.get('lat', 0))
+                    lon = float(station.get('lng', 0))
+                    name = station.get('name', 'Unknown Station')
+                    state = station.get('state', 'Unknown')
+                    
+                    # Calculate distance
+                    distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    
+                    # Apply distance filter immediately
+                    if distance_km <= search_distance:
+                        # Check if we already have this station from observations
+                        existing_station = next((s for s in all_stations if s['id'] == station_id), None)
+                        
+                        if existing_station:
+                            # Merge capabilities
+                            if 'Tide Predictions' not in existing_station['capabilities']:
+                                existing_station['capabilities'].append('Tide Predictions')
+                            existing_station['station_type'] = 'observation+reference'
+                        else:
+                            # Add as new reference station
+                            bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                            bearing_text = self._bearing_to_text(bearing_deg)
+                            
+                            capabilities = ['Tide Predictions', 'Reference Station']
+                            station_datum = self._query_station_datum(station_id)
+                            
+                            if station_datum:
+                                station_info = {
+                                    'id': station_id,
+                                    'name': name,
+                                    'lat': lat,
+                                    'lon': lon,
+                                    'distance_km': distance_km,
+                                    'bearing': bearing_deg,
+                                    'bearing_text': bearing_text,
+                                    'state': state,
+                                    'capabilities': capabilities,
+                                    'type': 'coops',
+                                    'station_type': 'reference',
+                                    'datum': station_datum
+                                }
+                                all_stations.append(station_info)
+                                print(f"    📍 {station_id}: {distance_km:.1f}km, datum {station_datum}")
+                                
+                except (ValueError, KeyError, TypeError):
+                    continue
             
-            # Remove duplicates and sort by distance
+            # CRITICAL FIX: Apply hard limits - remove duplicates, sort by distance, limit to 10
             unique_stations = {}
             for station in all_stations:
                 station_id = station['id']
@@ -350,12 +440,12 @@ class MarineDataConfigurator:
                     unique_stations[station_id] = station
             
             result = list(unique_stations.values())
-            result.sort(key=lambda x: x['distance_km'])
-            result = result[:10]  # Limit to 10 closest
+            result.sort(key=lambda x: x['distance_km'])  # Sort by distance
+            result = result[:10]  # HARD LIMIT to 10 stations
             
-            print(f"  ✅ Found {len(result)} CO-OPS stations (limited to 10 closest)")
+            print(f"  ✅ Found {len(result)} CO-OPS stations (limited to 10 closest within {search_distance}km)")
             return result
-            
+                
         except Exception as e:
             print(f"  ❌ CO-OPS station discovery failed: {e}")
             return []
@@ -648,6 +738,72 @@ class MarineDataConfigurator:
         print(f"\n✅ Field selection completed: {selected_count} fields selected")
         
         return selected_fields
+
+    def _select_stations_per_module(self, stations, selected_fields):
+        """
+        Select stations per module with interactive curses interface.
+        FIXED: Complete implementation with proper station selection flow.
+        
+        Args:
+            stations: List of discovered stations  
+            selected_fields: Dictionary of selected fields
+            
+        Returns:
+            dict: Selected stations organized by type with station IDs
+        """
+        print("\n🚢 STATION SELECTION PER MODULE")
+        print("-" * 40)
+        print("You will now select specific stations for data collection.")
+        print("Recommend selecting 2-3 stations per type for backup coverage.")
+        
+        # Use the existing display station selection method
+        selected_stations_list = self._display_station_selection(stations)
+        
+        if not selected_stations_list:
+            print("⚠️  No stations selected. Using automatic fallback selection...")
+            # Fallback: automatically select closest stations of each type
+            coops_stations = [s for s in stations if s['type'] == 'coops'][:2]
+            ndbc_stations = [s for s in stations if s['type'] == 'ndbc'][:2]
+            selected_stations_list = coops_stations + ndbc_stations
+            
+            if selected_stations_list:
+                print(f"✅ Auto-selected {len(selected_stations_list)} stations as fallback")
+            else:
+                print("❌ No stations available for selection")
+                return {}
+        
+        # Organize stations by type for configuration format
+        organized_stations = {}
+        
+        for station in selected_stations_list:
+            station_type = station['type']
+            station_id = station['id']
+            
+            if station_type == 'coops':
+                if 'coops_stations' not in organized_stations:
+                    organized_stations['coops_stations'] = []
+                organized_stations['coops_stations'].append(station_id)
+            elif station_type == 'ndbc':
+                if 'ndbc_stations' not in organized_stations:
+                    organized_stations['ndbc_stations'] = []
+                organized_stations['ndbc_stations'].append(station_id)
+        
+        # Display final selection summary
+        total_selected = len(selected_stations_list)
+        coops_count = len(organized_stations.get('coops_stations', []))
+        ndbc_count = len(organized_stations.get('ndbc_stations', []))
+        
+        print(f"\n✅ STATION SELECTION COMPLETED:")
+        print(f"    • Total stations: {total_selected}")
+        print(f"    • CO-OPS stations: {coops_count}")
+        print(f"    • NDBC stations: {ndbc_count}")
+        
+        if coops_count > 0:
+            print(f"    • CO-OPS IDs: {', '.join(organized_stations['coops_stations'])}")
+        if ndbc_count > 0:
+            print(f"    • NDBC IDs: {', '.join(organized_stations['ndbc_stations'])}")
+        
+        return organized_stations
 
     def _display_station_selection(self, stations):
         """
