@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Snow Leopard
+# Secret Animal: Meercat
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -555,18 +555,22 @@ class COOPSAPIClient:
             # Get station-specific datum from configuration
             datum = self._get_station_datum(station_id)
             
-            # Build CO-OPS water level API request
+            if station_datum == 'NAVD88':
+                water_level_datum = 'NAVD'
+            else:
+                water_level_datum = station_datum
+
             params = {
                 'product': 'water_level',
-                'application': 'WeeWX-MarineData',  # ADD: Required parameter for API compatibility
+                'application': 'WeeWX-MarineData',
                 'station': station_id,
                 'date': 'latest',
                 'format': 'json',
                 'units': 'english',
                 'time_zone': 'gmt',
-                'datum': self._get_station_datum(station_id)
+                'datum': water_level_datum  # Use the API-specific datum
             }
-            
+
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
             headers = {
