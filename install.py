@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-# Magic Animal: Llama
+# Magic Animal: Alpaca
 """
-WeeWX Marine Data Extension Installer - ARCHITECTURE CORRECTED
-
-CRITICAL FIXES IMPLEMENTED:
-1. Three-table architecture instead of archive injection
-2. Proper table creation: coops_realtime, coops_predictions, ndbc_data  
-3. Auto-routing based on YAML field definitions
-4. NO archive table modification
-5. Direct database operations for marine data
-
-Re-organized installer following WeeWX 5.1 success manual patterns.
-All functionality preserved - just properly separated into specialist classes.
-
-Key Success Patterns Implemented:
-- Simple ExtensionInstaller class (15-20 lines)
-- Correct imports: weecfg.extension not weewx.engine
-- Required loader() function
-- List format service registration
-- String-only configuration values
-- Specialist classes for complex operations
-
-Author: Shane Burkhardt
+Copyright 2025 Shane Burkhardt
 """
 
 import os
@@ -1509,19 +1489,19 @@ class MarineDataConfigurator:
             'timeout': 30
         }
     
-    def _write_configuration_files(self, stations, fields, intervals, user_lat, user_lon):
+    def _write_configuration_files(self, selected_stations, selected_fields, intervals, user_lat, user_lon):
         """Write configuration files in exact CONF format with comprehensive mapping."""
         print("\n📄 CONFIGURATION FILE GENERATION")
         print("-" * 40)
         
-        # Separate stations by type for configuration
-        coops_stations = [s for s in stations if s.get('type') == 'coops']
-        ndbc_stations = [s for s in stations if s.get('type') == 'ndbc']
+        # FIXED: selected_stations is a dict with station IDs, not station objects
+        coops_station_ids = selected_stations.get('coops_stations', [])
+        ndbc_station_ids = selected_stations.get('ndbc_stations', [])
         
         print(f"📊 Configuration Summary:")
-        print(f"  • CO-OPS stations: {len(coops_stations)}")
-        print(f"  • NDBC stations: {len(ndbc_stations)}")
-        print(f"  • Selected fields: {len(fields)}")
+        print(f"  • CO-OPS stations: {len(coops_station_ids)}")
+        print(f"  • NDBC stations: {len(ndbc_station_ids)}")
+        print(f"  • Selected fields: {len(selected_fields)}")
         print(f"  • User location: {user_lat:.4f}, {user_lon:.4f}")
         
         # Generate comprehensive configuration dictionary
@@ -1539,17 +1519,29 @@ class MarineDataConfigurator:
                 'user_longitude': str(user_lon),
                 
                 # Station selections with detailed configuration
-                'selected_stations': self._generate_station_configuration(coops_stations, ndbc_stations),
+                'selected_stations': {
+                    'coops_stations': {station_id: 'true' for station_id in coops_station_ids},
+                    'ndbc_stations': {station_id: 'true' for station_id in ndbc_station_ids}
+                },
                 
-                # Module configurations from YAML and user selections
-                'coops_module': self._generate_coops_module_config(coops_stations, intervals),
-                'ndbc_module': self._generate_ndbc_module_config(ndbc_stations, intervals),
+                # Field selection tracking
+                'field_selection': {
+                    'selection_timestamp': str(int(time.time())),
+                    'config_version': '1.0',
+                    'complexity_level': 'custom',
+                    'selected_fields': self._organize_fields_by_module(selected_fields)
+                },
                 
                 # Field mappings transformed from YAML to CONF format
-                'field_mappings': self._transform_fields_yaml_to_conf(fields),
+                'field_mappings': self._transform_fields_yaml_to_conf(selected_fields),
                 
                 # Collection intervals and timing
-                'collection_intervals': self._generate_interval_configuration(intervals),
+                'collection_intervals': {
+                    'coops_collection_interval': '600',    # 10 minutes
+                    'tide_predictions_interval': '21600',  # 6 hours
+                    'ndbc_weather_interval': '3600',       # 1 hour
+                    'ndbc_ocean_interval': '3600'          # 1 hour
+                },
                 
                 # API endpoint configuration
                 'api_endpoints': self._generate_api_endpoint_configuration()
