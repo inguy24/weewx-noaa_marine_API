@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Bald Eagle
+# Magic Animal: Red-tailed Hawk
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -93,7 +93,7 @@ class MarineDataInstaller(ExtensionInstaller):
             
             # Step 3: Database schema management with merged configuration - ARCHITECTURE FIXED
             db_manager = MarineDatabaseManager(merged_config)
-            db_manager.create_marine_tables(selected_options)
+            db_manager._create_marine_tables(selected_options)
             
             # Step 4: Update engine configuration
             engine.config_dict.update(config_dict)
@@ -1835,15 +1835,6 @@ class MarineDatabaseManager:
             import traceback
             traceback.print_exc()
             raise
-
-    def extend_database_schema(self, selected_options):
-        """DEPRECATED - Legacy method that used archive injection - now redirects to three-table creation."""
-        print("\n🗄️  DATABASE SCHEMA EXTENSION - ARCHITECTURE CORRECTED")
-        print("-" * 40)
-        print("⚠️  Legacy archive injection disabled - using three-table architecture")
-        
-        # Redirect to new three-table creation
-        self.create_marine_tables(selected_options)
 
     def _check_existing_fields(self):
         """Check which marine fields already exist in database."""
