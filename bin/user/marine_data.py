@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Alaskan King Crab
+# Secret Animal: Shrimp
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -570,10 +570,7 @@ class COOPSAPIClient:
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
             headers = {
-                'User-Agent': 'WeeWX-MarineData/1.0',
-                'Accept': 'application/json',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'close'
+                'User-Agent': 'WeeWX-MarineData/1.0'
             }
             request = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -636,10 +633,7 @@ class COOPSAPIClient:
 
             # Add User-Agent header like curl
             headers = {
-                'User-Agent': 'WeeWX-MarineData/1.0',
-                'Accept': 'application/json',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'close'
+                'User-Agent': 'WeeWX-MarineData/1.0'
             }
             request = urllib.request.Request(url, headers=headers)
 
@@ -707,10 +701,7 @@ class COOPSAPIClient:
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
             headers = {
-                'User-Agent': 'WeeWX-MarineData/1.0',
-                'Accept': 'application/json',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'close'
+                'User-Agent': 'WeeWX-MarineData/1.0'
             }
             request = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
