@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Blue Crab
+# Secret Animal: Alaskan King Crab
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -558,17 +558,25 @@ class COOPSAPIClient:
             # Build CO-OPS water level API request
             params = {
                 'product': 'water_level',
+                'application': 'WeeWX-MarineData',  # ADD: Required parameter for API compatibility
                 'station': station_id,
                 'date': 'latest',
                 'format': 'json',
                 'units': 'english',
                 'time_zone': 'gmt',
-                'datum': self._get_station_datum(station_id)  # Use station-specific datum
+                'datum': self._get_station_datum(station_id)
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            headers = {
+                'User-Agent': 'WeeWX-MarineData/1.0',
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'close'
+            }
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if response.getcode() != 200:
                     raise MarineDataAPIError(f"CO-OPS API returned status {response.getcode()}",
                                            error_type='api_error', station_id=station_id, api_source='coops')
@@ -611,6 +619,7 @@ class COOPSAPIClient:
             
             params = {
                 'product': 'predictions',
+                'application': 'WeeWX-MarineData',  # CRITICAL: Required by CO-OPS API for tracking/rate limiting
                 'station': station_id,
                 'begin_date': now.strftime('%Y%m%d'),  # Date only, no time
                 'end_date': end_time.strftime('%Y%m%d'),  # Date only, no time
@@ -626,7 +635,13 @@ class COOPSAPIClient:
             log.error(f"DEBUG: CO-OPS URL for {station_id}: {url}")
 
             # Add User-Agent header like curl
-            request = urllib.request.Request(url, headers={'User-Agent': 'WeeWX-MarineData/1.0'})
+            headers = {
+                'User-Agent': 'WeeWX-MarineData/1.0',
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'close'
+            }
+            request = urllib.request.Request(url, headers=headers)
 
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if response.getcode() != 200:
@@ -681,17 +696,24 @@ class COOPSAPIClient:
             
             params = {
                 'product': 'water_temperature',
+                'application': 'WeeWX-MarineData',  # ADD: Required parameter for API compatibility
                 'station': station_id,
                 'date': 'latest',
                 'format': 'json',
                 'units': 'english',
-                'time_zone': 'gmt',
-                'datum': self._get_station_datum(station_id)  # Use station-specific datum
+                'time_zone': 'gmt'
             }
             
             url = f"{self.base_url}?" + urllib.parse.urlencode(params)
             
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            headers = {
+                'User-Agent': 'WeeWX-MarineData/1.0',
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'close'
+            }
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if response.getcode() != 200:
                     return None  # Water temperature not available at this station
                 
