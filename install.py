@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Capybara
+# Magic Animal: Osprey
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -1798,18 +1798,27 @@ class MarineDatabaseManager:
     def create_marine_tables(self, selected_options):
         """ARCHITECTURE FIX: Create three separate marine tables."""
         print("  📋 Creating marine database tables...")
+        print(f"  DEBUG: selected_options type = {type(selected_options)}")
+        print(f"  DEBUG: selected_options keys = {selected_options.keys() if isinstance(selected_options, dict) else 'not a dict'}")
         
         # Determine which tables are needed based on selected fields
         tables_needed = self._determine_required_tables(selected_options)
+        print(f"  DEBUG: tables_needed = {tables_needed}")
+        
+        if not tables_needed:
+            print("  ⚠️  No tables needed - creating default marine tables...")
+            # Fallback: create all three tables
+            tables_needed = {'coops_realtime', 'coops_predictions', 'ndbc_data'}
         
         # Create each required table
         for table_name in tables_needed:
-            self._create_marine_table(table_name)
-            print(f"    ✅ Table '{table_name}' ready")
+            try:
+                self._create_marine_table(table_name)
+                print(f"    ✅ Table '{table_name}' ready")
+            except Exception as e:
+                print(f"    ❌ Error creating table '{table_name}': {e}")
         
-        print(f"✅ Marine database architecture completed")
-        print(f"    • Tables created: {len(tables_needed)}")
-        print(f"    • Architecture: Three-table design (NO archive injection)")
+        print(f"✅ Marine database architecture completed - {len(tables_needed)} tables")
 
     def extend_database_schema(self, selected_options):
         """DEPRECATED - Legacy method that used archive injection - now redirects to three-table creation."""
