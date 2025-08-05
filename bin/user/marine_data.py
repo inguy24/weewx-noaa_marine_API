@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Felis Cattus 
+# Secret Animal: Felis Cattus
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -212,6 +212,209 @@ class MarineDatabaseManager:
         except Exception as e:
             log.error(f"Error retrieving latest marine data for {station_id}: {e}")
             return {}
+
+
+class MarineDataSearchList:
+    """
+    Search list extension to provide marine data access for WeeWX reports and templates.
+    
+    This class enables WeeWX reports to access data from the three marine tables:
+    coops_realtime, coops_predictions, and ndbc_data.
+    
+    Usage in templates: $marine_data.get_latest_data()
+    """
+    
+    def __init__(self, config_dict):
+        """
+        Initialize marine data search list extension.
+        
+        Args:
+            config_dict: WeeWX configuration dictionary
+        """
+        self.config_dict = config_dict
+        self.db_manager = MarineDatabaseManager(config_dict)
+        
+        # Get configured stations for data retrieval
+        service_config = config_dict.get('MarineDataService', {})
+        selected_stations = service_config.get('selected_stations', {})
+        
+        self.coops_stations = []
+        if 'coops_stations' in selected_stations:
+            self.coops_stations = [station_id for station_id, enabled in selected_stations['coops_stations'].items() 
+                                 if str(enabled).lower() == 'true']
+        
+        self.ndbc_stations = []
+        if 'ndbc_stations' in selected_stations:
+            self.ndbc_stations = [station_id for station_id, enabled in selected_stations['ndbc_stations'].items() 
+                                if str(enabled).lower() == 'true']
+    
+    def get_latest_data(self, station_id=None):
+        """
+        Get latest marine data for report templates.
+        
+        Args:
+            station_id (str, optional): Specific station ID, or None for all stations
+            
+        Returns:
+            dict: Latest marine data organized by station and table
+        """
+        try:
+            if station_id:
+                # Get data for specific station
+                return self.db_manager.get_latest_marine_data(station_id)
+            else:
+                # Get data for all configured stations
+                all_data = {}
+                
+                # Get CO-OPS station data
+                for station_id in self.coops_stations:
+                    station_data = self.db_manager.get_latest_marine_data(station_id)
+                    if station_data:
+                        all_data[station_id] = station_data
+                
+                # Get NDBC station data
+                for station_id in self.ndbc_stations:
+                    station_data = self.db_manager.get_latest_marine_data(station_id)
+                    if station_data:
+                        all_data[station_id] = station_data
+                
+                return all_data
+                
+        except Exception as e:
+            log.error(f"Error in marine data search list: {e}")
+            return {}
+    
+    def get_coops_data(self, station_id=None):
+        """
+        Get CO-OPS specific data (realtime and predictions).
+        
+        Args:
+            station_id (str, optional): Specific CO-OPS station ID
+            
+        Returns:
+            dict: CO-OPS data from coops_realtime and coops_predictions tables
+        """
+        try:
+            if not self.db_manager.database_manager:
+                return {}
+            
+            stations_to_query = [station_id] if station_id else self.coops_stations
+            coops_data = {}
+            
+            for sid in stations_to_query:
+                station_data = {}
+                
+                # Get realtime data
+                try:
+                    sql = "SELECT * FROM coops_realtime WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
+                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    if result:
+                        station_data['realtime'] = dict(result)
+                except Exception:
+                    pass
+                
+                # Get predictions data
+                try:
+                    sql = "SELECT * FROM coops_predictions WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
+                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    if result:
+                        station_data['predictions'] = dict(result)
+                except Exception:
+                    pass
+                
+                if station_data:
+                    coops_data[sid] = station_data
+            
+            return coops_data
+            
+        except Exception as e:
+            log.error(f"Error getting CO-OPS data: {e}")
+            return {}
+    
+    def get_ndbc_data(self, station_id=None):
+        """
+        Get NDBC buoy data.
+        
+        Args:
+            station_id (str, optional): Specific NDBC station ID
+            
+        Returns:
+            dict: NDBC data from ndbc_data table
+        """
+        try:
+            if not self.db_manager.database_manager:
+                return {}
+            
+            stations_to_query = [station_id] if station_id else self.ndbc_stations
+            ndbc_data = {}
+            
+            for sid in stations_to_query:
+                try:
+                    sql = "SELECT * FROM ndbc_data WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
+                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    if result:
+                        ndbc_data[sid] = dict(result)
+                except Exception:
+                    pass
+            
+            return ndbc_data
+            
+        except Exception as e:
+            log.error(f"Error getting NDBC data: {e}")
+            return {}
+    
+    def get_station_summary(self):
+        """
+        Get summary of all configured marine stations with latest data availability.
+        
+        Returns:
+            dict: Station summary with data availability status
+        """
+        try:
+            summary = {
+                'coops_stations': {},
+                'ndbc_stations': {},
+                'total_stations': len(self.coops_stations) + len(self.ndbc_stations),
+                'data_available': 0
+            }
+            
+            # Check CO-OPS stations
+            for station_id in self.coops_stations:
+                station_data = self.db_manager.get_latest_marine_data(station_id)
+                summary['coops_stations'][station_id] = {
+                    'has_realtime': 'coops_realtime' in station_data,
+                    'has_predictions': 'coops_predictions' in station_data,
+                    'last_update': None
+                }
+                
+                if station_data:
+                    summary['data_available'] += 1
+                    # Find most recent timestamp
+                    timestamps = []
+                    for table_data in station_data.values():
+                        if 'dateTime' in table_data:
+                            timestamps.append(table_data['dateTime'])
+                    if timestamps:
+                        summary['coops_stations'][station_id]['last_update'] = max(timestamps)
+            
+            # Check NDBC stations
+            for station_id in self.ndbc_stations:
+                station_data = self.db_manager.get_latest_marine_data(station_id)
+                summary['ndbc_stations'][station_id] = {
+                    'has_data': 'ndbc_data' in station_data,
+                    'last_update': None
+                }
+                
+                if station_data:
+                    summary['data_available'] += 1
+                    if 'ndbc_data' in station_data and 'dateTime' in station_data['ndbc_data']:
+                        summary['ndbc_stations'][station_id]['last_update'] = station_data['ndbc_data']['dateTime']
+            
+            return summary
+            
+        except Exception as e:
+            log.error(f"Error getting station summary: {e}")
+            return {'coops_stations': {}, 'ndbc_stations': {}, 'total_stations': 0, 'data_available': 0}
 
 
 class COOPSAPIClient:
@@ -1387,6 +1590,16 @@ class MarineDataService(StdService):
         
         log.info("Marine Data service initialized successfully")
         self.service_enabled = True
+    
+    def get_marine_data_for_templates(self):
+        """
+        Provide marine data access for WeeWX templates and reports.
+        IMPLEMENTATION: Returns MarineDataSearchList instance for template access.
+        
+        Returns:
+            MarineDataSearchList: Search list extension for marine data access
+        """
+        return MarineDataSearchList(self.config_dict)
     
     def _validate_basic_config(self):
         """
