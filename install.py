@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Barking Spider
+# Magic Animal: Golden Orb Weaver
 """
 WeeWX Marine Data Extension Installer - ARCHITECTURE CORRECTED
 
@@ -550,6 +550,104 @@ class MarineDataConfigurator:
         # Each direction spans 22.5 degrees
         direction_index = int((bearing_degrees + 11.25) / 22.5) % 16
         return directions[direction_index]
+
+    def _select_fields(self):
+        """
+        Handle field selection with complexity levels (minimal/all/custom).
+        
+        Returns:
+            dict: Selected fields organized by field name with field configurations
+        """
+        print("\n🎯 FIELD SELECTION")
+        print("-" * 30)
+        
+        # Show complexity menu and get user choice
+        print("Field Selection Options:")
+        print("1. MINIMAL - Essential marine monitoring fields")
+        print("2. ALL - Complete marine dataset with all available fields") 
+        print("3. CUSTOM - Select specific fields manually")
+        
+        while True:
+            try:
+                choice = input("\nEnter choice [1-3]: ").strip()
+                if choice == '1':
+                    complexity_level = 'minimal'
+                    break
+                elif choice == '2':
+                    complexity_level = 'all'
+                    break
+                elif choice == '3':
+                    complexity_level = 'custom'
+                    break
+                else:
+                    print("Invalid choice. Please enter 1, 2, or 3.")
+            except (KeyboardInterrupt, EOFError):
+                print("\nInstallation cancelled by user.")
+                sys.exit(1)
+        
+        # Get fields from YAML structure
+        all_fields = self.yaml_data.get('fields', {})
+        if not all_fields:
+            print("❌ CRITICAL ERROR: No fields defined in YAML")
+            print("   The marine_data_fields.yaml file is missing the 'fields' section.")
+            print("   This is a package integrity issue.")
+            sys.exit(1)
+        
+        # Get fields based on complexity level
+        if complexity_level == 'minimal':
+            # Get only fields marked for minimal complexity
+            selected_fields = {}
+            for field_name, field_config in all_fields.items():
+                complexity_levels = field_config.get('complexity_levels', [])
+                if 'minimal' in complexity_levels:
+                    selected_fields[field_name] = True
+            
+            if not selected_fields:
+                print("⚠️ No minimal fields found in YAML, using fallback selection")
+                # Fallback minimal selection
+                minimal_fallback = ['current_water_level', 'next_high_time', 'next_high_height', 
+                                'wave_height', 'marine_sea_surface_temp']
+                for field_name in minimal_fallback:
+                    if field_name in all_fields:
+                        selected_fields[field_name] = True
+        
+        elif complexity_level == 'all':
+            # Select ALL fields from the fields section
+            selected_fields = {field_name: True for field_name in all_fields.keys()}
+        
+        elif complexity_level == 'custom':
+            # Execute custom selection interface
+            print("\nStarting custom field selection interface...")
+            custom_selection = self.show_marine_custom_selection(all_fields)
+            
+            if custom_selection is not None and len(custom_selection) > 0:
+                selected_fields = custom_selection
+            elif custom_selection is None:
+                print("Custom selection cancelled. Using minimal defaults.")
+                selected_fields = {}
+                for field_name, field_config in all_fields.items():
+                    complexity_levels = field_config.get('complexity_levels', [])
+                    if 'minimal' in complexity_levels:
+                        selected_fields[field_name] = True
+            else:
+                print("No fields selected in custom mode. Using minimal defaults.")
+                selected_fields = {}
+                for field_name, field_config in all_fields.items():
+                    complexity_levels = field_config.get('complexity_levels', [])
+                    if 'minimal' in complexity_levels:
+                        selected_fields[field_name] = True
+        
+        # Validate selection
+        if not selected_fields:
+            print("❌ CRITICAL ERROR: No fields selected")
+            print("   Cannot proceed with installation without field selection.")
+            sys.exit(1)
+        
+        # Display selection summary
+        selected_count = len([f for f in selected_fields.values() if f])
+        print(f"\n✅ Field selection completed: {selected_count} fields selected")
+        
+        return selected_fields
 
     def _display_station_selection(self, stations):
         """
