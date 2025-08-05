@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Osprey
+# Magic Animal: Bald Eagle
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -1795,30 +1795,46 @@ class MarineDatabaseManager:
     def __init__(self, config_dict):
         self.config_dict = config_dict
         
-    def create_marine_tables(self, selected_options):
-        """ARCHITECTURE FIX: Create three separate marine tables."""
-        print("  📋 Creating marine database tables...")
-        print(f"  DEBUG: selected_options type = {type(selected_options)}")
-        print(f"  DEBUG: selected_options keys = {selected_options.keys() if isinstance(selected_options, dict) else 'not a dict'}")
-        
-        # Determine which tables are needed based on selected fields
-        tables_needed = self._determine_required_tables(selected_options)
-        print(f"  DEBUG: tables_needed = {tables_needed}")
-        
-        if not tables_needed:
-            print("  ⚠️  No tables needed - creating default marine tables...")
-            # Fallback: create all three tables
-            tables_needed = {'coops_realtime', 'coops_predictions', 'ndbc_data'}
-        
-        # Create each required table
-        for table_name in tables_needed:
-            try:
-                self._create_marine_table(table_name)
-                print(f"    ✅ Table '{table_name}' ready")
-            except Exception as e:
-                print(f"    ❌ Error creating table '{table_name}': {e}")
-        
-        print(f"✅ Marine database architecture completed - {len(tables_needed)} tables")
+    def _create_marine_table(self, table_name):
+        """Create specific marine table with database-agnostic approach using WeeWX config."""
+        try:
+            # CORRECTED: Proper WeeWX 5.1 database type detection
+            databases_config = self.config_dict.get('Databases', {})
+            archive_database_binding = databases_config.get('archive_database', 'archive_sqlite')
+            
+            # Get the specific database configuration for the archive binding
+            archive_db_config = databases_config.get(archive_database_binding, {})
+            database_type = archive_db_config.get('database_type', 'SQLite')
+            
+            print(f"    DEBUG: archive_database_binding = {archive_database_binding}")
+            print(f"    DEBUG: archive_db_config = {archive_db_config}")
+            print(f"    DEBUG: database_type = {database_type}")
+            
+            # Get DatabaseTypes configuration
+            database_types = self.config_dict.get('DatabaseTypes', {})
+            
+            if database_type.upper() == 'MYSQL':
+                # Use MySQL configuration
+                mysql_config = database_types.get('MySQL', {})
+                # Merge with the specific database instance config
+                mysql_config.update(archive_db_config)
+                print(f"    DEBUG: Using MySQL with config: {mysql_config}")
+                self._create_table_mysql(table_name, mysql_config)
+            else:
+                # Use SQLite configuration (default)
+                sqlite_config = database_types.get('SQLite', {})
+                # Merge with the specific database instance config  
+                sqlite_config.update(archive_db_config)
+                print(f"    DEBUG: Using SQLite with config: {sqlite_config}")
+                self._create_table_sqlite(table_name, sqlite_config)
+                
+            print(f"    ✅ Created table '{table_name}' using {database_type} database")
+            
+        except Exception as e:
+            print(f"    ❌ Error creating table {table_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def extend_database_schema(self, selected_options):
         """DEPRECATED - Legacy method that used archive injection - now redirects to three-table creation."""
