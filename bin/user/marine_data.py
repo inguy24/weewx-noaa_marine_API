@@ -554,11 +554,12 @@ class COOPSAPIClient:
             
             # Get station-specific datum from configuration
             datum = self._get_station_datum(station_id)
-            
-            if station_datum == 'NAVD88':
+
+            # Fix sloppy NOAA endpoint issue with NAVD88 v NAVD depending upon endpoint           
+            if datum == 'NAVD88':
                 water_level_datum = 'NAVD'
             else:
-                water_level_datum = station_datum
+                water_level_datum = datum
 
             params = {
                 'product': 'water_level',
