@@ -1909,7 +1909,7 @@ class MarineDatabaseManager:
         
         return tables_needed
 
-    def _create_marine_table(self, table_name):
+    def _create_marine_tables(self, table_name):
         """Create specific marine table with database-agnostic approach using WeeWX config."""
         try:
             # Get database configuration from WeeWX config
