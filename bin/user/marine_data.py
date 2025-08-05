@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Mexican Wolf
+# Secret Animal: Snow Leopard
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -591,8 +591,24 @@ class COOPSAPIClient:
                 raise MarineDataAPIError("CO-OPS rate limit exceeded",
                                        error_type='rate_limit', station_id=station_id, api_source='coops')
             else:
+                # Enhanced debugging for HTTP errors
+                log.error(f"DEBUG: Water Level HTTP Error details - Code: {e.code}, Reason: {e.reason}")
+                log.error(f"DEBUG: Water Level Failed URL: {url}")
+                
+                # Try to read error response body
+                try:
+                    error_response = e.read().decode('utf-8')
+                    log.error(f"DEBUG: Water Level Error response body: {error_response[:500]}")
+                except:
+                    log.error("DEBUG: Could not read water level error response body")
+
+                # DEBUG: Log the exact request that was sent
+                log.error(f"DEBUG: Water Level Request method: {request.get_method()}")
+                log.error(f"DEBUG: Water Level Request headers: {dict(request.headers)}")
+                log.error(f"DEBUG: Water Level Request full URL: {request.full_url}")
+                
                 raise MarineDataAPIError(f"CO-OPS HTTP error {e.code}: {e.reason}",
-                                       error_type='api_error', station_id=station_id, api_source='coops')
+                                    error_type='api_error', station_id=station_id, api_source='coops')
 
         except socket.timeout:
             raise MarineDataAPIError("CO-OPS request timeout",
