@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Red-tailed Hawk
+# Magic Animal: Harris's Hawk
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -1795,40 +1795,98 @@ class MarineDatabaseManager:
     def __init__(self, config_dict):
         self.config_dict = config_dict
         
-    def _create_marine_table(self, table_name):
-        """Create specific marine table with database-agnostic approach using WeeWX config."""
+    def _create_marine_tables(self, selected_options):
+        """Create marine tables based on selections - FIXED all three issues."""
+        print("\n📊 MARINE DATABASE TABLE CREATION")
+        print("-" * 50)
+        
+        # Extract field selections from the passed dictionary
+        selected_fields = selected_options.get('fields', {})
+        
+        if not selected_fields or not any(selected_fields.values()):
+            print("⚠️  No fields selected - skipping table creation")
+            return
+        
+        # ISSUE 1 FIX: DATA-DRIVEN field mapping using exact field name matching
+        field_mappings = self.config_dict.get('MarineDataService', {}).get('field_mappings', {})
+        required_tables = set()
+        
+        print(f"    🔍 Analyzing {len(selected_fields)} selected fields...")
+        print(f"    🔍 Available field mappings: {list(field_mappings.keys())}")
+        
+        # Scan field mappings to find which tables are needed for selected fields
+        for module_name, module_fields in field_mappings.items():
+            if isinstance(module_fields, dict):
+                for service_field, field_config in module_fields.items():
+                    if isinstance(field_config, dict):
+                        # FIXED: Check if this exact service field was selected
+                        if service_field in selected_fields and selected_fields[service_field]:
+                            # Get target table from field mapping configuration
+                            target_table = field_config.get('database_table', 'archive')
+                            if target_table != 'archive':
+                                required_tables.add(target_table)
+                                print(f"      ✓ Field '{service_field}' → table '{target_table}'")
+        
+        if not required_tables:
+            print("⚠️  No marine tables required for selected fields")
+            return
+        
+        print(f"📋 Creating {len(required_tables)} marine database tables: {list(required_tables)}")
+        
+        # Create each required table using the FIXED single table creation method
+        for table_name in required_tables:
+            print(f"  🔨 Creating table: {table_name}")
+            self._create_single_marine_table(table_name)
+        
+        print("✅ Marine database table creation completed")
+
+    def _create_single_marine_table(self, table_name):
+        """Create specific marine table - FIXED database detection and table creation."""
         try:
-            # CORRECTED: Proper WeeWX 5.1 database type detection
+            # ISSUE 2 FIX: Proper WeeWX 5.1 database type detection
             databases_config = self.config_dict.get('Databases', {})
-            archive_database_binding = databases_config.get('archive_database', 'archive_sqlite')
             
-            # Get the specific database configuration for the archive binding
-            archive_db_config = databases_config.get(archive_database_binding, {})
-            database_type = archive_db_config.get('database_type', 'SQLite')
+            # Check for MySQL database configuration first
+            mysql_found = False
+            sqlite_config = None
+            mysql_config = None
             
-            print(f"    DEBUG: archive_database_binding = {archive_database_binding}")
-            print(f"    DEBUG: archive_db_config = {archive_db_config}")
-            print(f"    DEBUG: database_type = {database_type}")
+            # Scan all database configurations for MySQL
+            for db_name, db_config in databases_config.items():
+                if isinstance(db_config, dict):
+                    db_type = db_config.get('database_type', '').upper()
+                    if db_type == 'MYSQL':
+                        mysql_config = db_config
+                        mysql_found = True
+                        print(f"    📋 Found MySQL database: {db_name}")
+                        break
+                    elif db_type == 'SQLITE' or 'sqlite' in db_name.lower():
+                        sqlite_config = db_config
             
-            # Get DatabaseTypes configuration
-            database_types = self.config_dict.get('DatabaseTypes', {})
-            
-            if database_type.upper() == 'MYSQL':
-                # Use MySQL configuration
-                mysql_config = database_types.get('MySQL', {})
-                # Merge with the specific database instance config
-                mysql_config.update(archive_db_config)
-                print(f"    DEBUG: Using MySQL with config: {mysql_config}")
-                self._create_table_mysql(table_name, mysql_config)
+            # Use MySQL if found, otherwise SQLite
+            if mysql_found and mysql_config:
+                print(f"    📋 Creating MySQL table: {table_name}")
+                # Get DatabaseTypes configuration for MySQL defaults
+                database_types = self.config_dict.get('DatabaseTypes', {})
+                mysql_defaults = database_types.get('MySQL', {})
+                mysql_defaults.update(mysql_config)  # Override with specific config
+                self._create_table_mysql(table_name, mysql_defaults)
             else:
-                # Use SQLite configuration (default)
-                sqlite_config = database_types.get('SQLite', {})
-                # Merge with the specific database instance config  
-                sqlite_config.update(archive_db_config)
-                print(f"    DEBUG: Using SQLite with config: {sqlite_config}")
-                self._create_table_sqlite(table_name, sqlite_config)
+                print(f"    📋 Creating SQLite table: {table_name}")
+                # Use SQLite configuration
+                if not sqlite_config:
+                    # Fallback SQLite config
+                    sqlite_config = databases_config.get('archive_sqlite', {
+                        'database_name': 'weewx.sdb',
+                        'database_type': 'SQLite'
+                    })
                 
-            print(f"    ✅ Created table '{table_name}' using {database_type} database")
+                database_types = self.config_dict.get('DatabaseTypes', {})
+                sqlite_defaults = database_types.get('SQLite', {})
+                sqlite_defaults.update(sqlite_config)
+                self._create_table_sqlite(table_name, sqlite_defaults)
+            
+            print(f"    ✅ Created table '{table_name}'")
             
         except Exception as e:
             print(f"    ❌ Error creating table {table_name}: {e}")
@@ -1909,48 +1967,6 @@ class MarineDatabaseManager:
         
         return tables_needed
 
-    def _create_marine_tables(self, selected_options):
-        """Create marine tables based on user selections - CORRECTLY parsing selected_options."""
-        print("\n📊 MARINE DATABASE TABLE CREATION")
-        print("-" * 50)
-        
-        # Extract field selections from the passed dictionary
-        selected_fields = selected_options.get('fields', {})
-        
-        if not selected_fields or not any(selected_fields.values()):
-            print("⚠️  No fields selected - skipping table creation")
-            return
-        
-        # DATA-DRIVEN: Get field mappings from configuration to determine tables
-        field_mappings = self.config_dict.get('MarineDataService', {}).get('field_mappings', {})
-        required_tables = set()
-        
-        # Scan field mappings to find which tables are needed for selected fields
-        for module_name, module_fields in field_mappings.items():
-            if isinstance(module_fields, dict):
-                for service_field, field_config in module_fields.items():
-                    if isinstance(field_config, dict):
-                        # Check if this field was selected by user
-                        database_field = field_config.get('database_field', '')
-                        if any(database_field in selected_field for selected_field in selected_fields.keys() if selected_fields[selected_field]):
-                            # Get target table from field mapping configuration
-                            target_table = field_config.get('database_table', 'archive')
-                            if target_table != 'archive':
-                                required_tables.add(target_table)
-        
-        if not required_tables:
-            print("⚠️  No marine tables required for selected fields")
-            return
-        
-        print(f"📋 Creating {len(required_tables)} marine database tables: {list(required_tables)}")
-        
-        # Create each required table using the existing single table creation method
-        for table_name in required_tables:
-            print(f"  🔨 Creating table: {table_name}")
-            self._create_marine_table(table_name)
-        
-        print("✅ Marine database table creation completed")
-
     def _get_fields_for_table(self, table_name):
         """Get all fields that belong to a specific table from field mappings."""
         table_fields = {}
@@ -1967,7 +1983,7 @@ class MarineDatabaseManager:
         return table_fields
     
     def _create_table_sqlite(self, table_name, sqlite_config):
-        """Create table in SQLite database."""
+        """Create table in SQLite database - FIXED with proper field definitions."""
         import sqlite3
         
         # Get SQLite database path from WeeWX config
@@ -1975,33 +1991,53 @@ class MarineDatabaseManager:
         
         # Handle relative path (following WeeWX patterns)
         if not os.path.isabs(database_name):
-            weewx_root = self.config_dict.get('WEEWX_ROOT', '/var/lib/weewx')
-            database_name = os.path.join(weewx_root, database_name)
+            sqlite_root = sqlite_config.get('SQLITE_ROOT', '/var/lib/weewx')
+            database_name = os.path.join(sqlite_root, database_name)
         
         print(f"    📋 Creating SQLite table in: {database_name}")
         
-        # Get fields for this table from field mappings
-        table_fields = self._get_fields_for_table(table_name)
-        field_definitions = self._build_field_definitions(table_fields)
+        # ISSUE 3 FIX: Get actual field definitions for this table from field mappings
+        table_fields = self._get_fields_for_table_from_config(table_name)
         
-        if not field_definitions:
-            print(f"    ⚠️  No valid fields for table '{table_name}' - skipping creation")
-            return
+        if not table_fields:
+            print(f"    ⚠️  No fields found for table '{table_name}' - using minimal schema")
+            # Minimal table with just primary keys
+            fields_sql = "dateTime INTEGER NOT NULL, station_id TEXT NOT NULL, PRIMARY KEY (dateTime, station_id)"
+        else:
+            # Build field definitions from actual configuration
+            field_definitions = []
+            for field_name, field_type in table_fields.items():
+                # SQLite type mapping
+                if field_type.startswith('VARCHAR') or field_type == 'TEXT':
+                    sqlite_type = 'TEXT'
+                elif field_type in ['REAL', 'FLOAT']:
+                    sqlite_type = 'REAL'
+                elif field_type in ['INTEGER', 'INT']:
+                    sqlite_type = 'INTEGER'
+                else:
+                    sqlite_type = 'REAL'  # Default for marine data
+                
+                field_definitions.append(f"{field_name} {sqlite_type}")
+            
+            # Combine with primary keys
+            all_fields = ['dateTime INTEGER NOT NULL', 'station_id TEXT NOT NULL'] + field_definitions
+            fields_sql = ', '.join(all_fields) + ', PRIMARY KEY (dateTime, station_id)'
         
-        # Connect to SQLite and create table
+        # Create table
         connection = sqlite3.connect(database_name, timeout=10)
         cursor = connection.cursor()
         
-        fields_sql = ', '.join(['dateTime INTEGER NOT NULL', 'station_id TEXT NOT NULL'] + field_definitions)
-        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql}, PRIMARY KEY (dateTime, station_id))"
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql})"
         
         print(f"    DEBUG: SQLite SQL: {sql}")
         cursor.execute(sql)
         connection.commit()
         connection.close()
+        
+        print(f"    ✅ SQLite table '{table_name}' created with {len(table_fields)} fields")
 
     def _create_table_mysql(self, table_name, mysql_config):
-        """Create table in MySQL database."""
+        """Create table in MySQL database - FIXED with proper field definitions."""
         try:
             import MySQLdb
         except ImportError:
@@ -2018,15 +2054,36 @@ class MarineDatabaseManager:
         
         print(f"    📋 Creating MySQL table in database: {database_name}")
         
-        # Get fields for this table from field mappings
-        table_fields = self._get_fields_for_table(table_name)
-        field_definitions = self._build_field_definitions_mysql(table_fields)
+        # ISSUE 3 FIX: Get actual field definitions for this table from field mappings
+        table_fields = self._get_fields_for_table_from_config(table_name)
         
-        if not field_definitions:
-            print(f"    ⚠️  No valid fields for table '{table_name}' - skipping creation")
-            return
+        if not table_fields:
+            print(f"    ⚠️  No fields found for table '{table_name}' - using minimal schema")
+            # Minimal table with just primary keys
+            fields_sql = "dateTime INT NOT NULL, station_id VARCHAR(20) NOT NULL, PRIMARY KEY (dateTime, station_id)"
+        else:
+            # Build field definitions from actual configuration
+            field_definitions = []
+            for field_name, field_type in table_fields.items():
+                # MySQL type mapping
+                if field_type.startswith('VARCHAR'):
+                    mysql_type = field_type
+                elif field_type == 'TEXT':
+                    mysql_type = 'TEXT'
+                elif field_type in ['REAL', 'FLOAT']:
+                    mysql_type = 'FLOAT'
+                elif field_type in ['INTEGER', 'INT']:
+                    mysql_type = 'INT'
+                else:
+                    mysql_type = 'FLOAT'  # Default for marine data
+                
+                field_definitions.append(f"{field_name} {mysql_type}")
+            
+            # Combine with primary keys
+            all_fields = ['dateTime INT NOT NULL', 'station_id VARCHAR(20) NOT NULL'] + field_definitions
+            fields_sql = ', '.join(all_fields) + ', PRIMARY KEY (dateTime, station_id)'
         
-        # Connect to MySQL and create table
+        # Create table
         connection = MySQLdb.connect(
             host=host,
             user=user,
@@ -2035,14 +2092,14 @@ class MarineDatabaseManager:
         )
         cursor = connection.cursor()
         
-        # MySQL-specific field definitions
-        fields_sql = ', '.join(['dateTime INT NOT NULL', 'station_id VARCHAR(20) NOT NULL'] + field_definitions)
-        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql}, PRIMARY KEY (dateTime, station_id))"
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql})"
         
         print(f"    DEBUG: MySQL SQL: {sql}")
         cursor.execute(sql)
         connection.commit()
         connection.close()
+        
+        print(f"    ✅ MySQL table '{table_name}' created with {len(table_fields)} fields")
 
     def _build_field_definitions(self, table_fields):
         """Build SQLite field definitions from table fields."""
@@ -2077,3 +2134,22 @@ class MarineDatabaseManager:
                     mysql_type = 'TEXT'
                 field_definitions.append(f"{db_field} {mysql_type}")
         return field_definitions
+    
+    def _get_fields_for_table_from_config(self, table_name):
+        """Get all fields that belong to a specific table from field mappings - DATA DRIVEN."""
+        table_fields = {}
+        
+        field_mappings = self.config_dict.get('MarineDataService', {}).get('field_mappings', {})
+        
+        for module_name, module_fields in field_mappings.items():
+            if isinstance(module_fields, dict):
+                for service_field, field_config in module_fields.items():
+                    if isinstance(field_config, dict):
+                        if field_config.get('database_table') == table_name:
+                            db_field = field_config.get('database_field')
+                            db_type = field_config.get('database_type', 'REAL')
+                            if db_field:
+                                table_fields[db_field] = db_type
+        
+        print(f"    📊 Found {len(table_fields)} fields for table '{table_name}': {list(table_fields.keys())}")
+        return table_fields
