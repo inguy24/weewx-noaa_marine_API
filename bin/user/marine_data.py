@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Bison
+# Secret Animal: Mexican Wolf
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -660,6 +660,11 @@ class COOPSAPIClient:
                 log.error(f"DEBUG: Error response body: {error_response[:500]}")
             except:
                 log.error("DEBUG: Could not read error response body")
+
+            # DEBUG: Log the exact request that was sent
+            log.error(f"DEBUG: Request method: {request.get_method()}")
+            log.error(f"DEBUG: Request headers: {dict(request.headers)}")
+            log.error(f"DEBUG: Request full URL: {request.full_url}")
             
             if e.code == 404:
                 raise MarineDataAPIError(f"CO-OPS station {station_id} predictions not available",
