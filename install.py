@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Alpaca
+# Magic Animal: Capybara
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -1762,6 +1762,27 @@ class MarineDataConfigurator:
         
         return conf_mappings
 
+    def _organize_fields_by_module(self, selected_fields):
+        """Organize selected fields by their API module for configuration."""
+        organized = {}
+        
+        # Get field definitions from YAML
+        all_fields = self.yaml_data.get('fields', {})
+        
+        for field_name in selected_fields.keys():
+            if field_name in all_fields:
+                field_config = all_fields[field_name]
+                api_module = field_config.get('api_module', 'unknown_module')
+                
+                if api_module not in organized:
+                    organized[api_module] = []
+                organized[api_module].append(field_name)
+        
+        # Convert lists to comma-separated strings for CONF format
+        for module in organized:
+            organized[module] = ', '.join(organized[module])
+        
+        return organized
 
 class MarineDatabaseManager:
     """
