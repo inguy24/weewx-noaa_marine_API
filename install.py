@@ -1903,51 +1903,25 @@ class MarineDatabaseManager:
         return tables_needed
 
     def _create_marine_table(self, table_name):
-        """Create specific marine table with data-driven schema from YAML field definitions."""
+        """Create specific marine table with database-agnostic approach using WeeWX config."""
         try:
-            # Get database manager from WeeWX
-            database_dict = self.config_dict.get('DatabaseTypes', {}).get('SQLite', {})
-            database_name = database_dict.get('database_name', 'weewx.sdb')
+            # Get database configuration from WeeWX config
+            database_dict = self.config_dict.get('DatabaseTypes', {})
             
-            # Handle relative path
-            if not os.path.isabs(database_name):
-                weewx_root = self.config_dict.get('WEEWX_ROOT', '/etc/weewx')
-                database_name = os.path.join(weewx_root, database_name)
+            # Determine database type from WeeWX configuration
+            databases_config = self.config_dict.get('Databases', {})
+            archive_database = databases_config.get('archive_database', 'archive_sqlite')
             
-            # Connect to database
-            connection = sqlite3.connect(database_name, timeout=10)
-            cursor = connection.cursor()
-            
-            # Get fields for this table from field mappings (DATA DRIVEN)
-            table_fields = self._get_fields_for_table(table_name)
-            
-            if not table_fields:
-                print(f"    ⚠️  No fields defined for table '{table_name}' - skipping creation")
-                connection.close()
-                return
-            
-            # Build field definitions dynamically from YAML data
-            field_definitions = []
-            for field_config in table_fields.values():
-                db_field = field_config.get('database_field')
-                db_type = field_config.get('database_type', 'REAL')
-                if db_field:
-                    field_definitions.append(f"{db_field} {db_type}")
-            
-            if not field_definitions:
-                print(f"    ⚠️  No valid fields for table '{table_name}' - skipping creation")
-                connection.close()
-                return
-            
-            # Create table with dynamic schema
-            fields_sql = ', '.join(['dateTime INTEGER NOT NULL', 'station_id TEXT NOT NULL'] + field_definitions)
-            sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql}, PRIMARY KEY (dateTime, station_id))"
-            
-            cursor.execute(sql)
-            connection.commit()
-            connection.close()
-            
-            print(f"    ✅ Created table '{table_name}' with {len(field_definitions)} fields from YAML definitions")
+            if 'mysql' in archive_database.lower():
+                # MySQL configuration
+                mysql_config = database_dict.get('MySQL', {})
+                self._create_table_mysql(table_name, mysql_config)
+            else:
+                # SQLite configuration (default)
+                sqlite_config = database_dict.get('SQLite', {})
+                self._create_table_sqlite(table_name, sqlite_config)
+                
+            print(f"    ✅ Created table '{table_name}' using WeeWX database configuration")
             
         except Exception as e:
             print(f"    ❌ Error creating table {table_name}: {e}")
@@ -1967,3 +1941,115 @@ class MarineDatabaseManager:
                             table_fields[field_name] = field_config
         
         return table_fields
+    
+    def _create_table_sqlite(self, table_name, sqlite_config):
+        """Create table in SQLite database."""
+        import sqlite3
+        
+        # Get SQLite database path from WeeWX config
+        database_name = sqlite_config.get('database_name', 'weewx.sdb')
+        
+        # Handle relative path (following WeeWX patterns)
+        if not os.path.isabs(database_name):
+            weewx_root = self.config_dict.get('WEEWX_ROOT', '/var/lib/weewx')
+            database_name = os.path.join(weewx_root, database_name)
+        
+        print(f"    📋 Creating SQLite table in: {database_name}")
+        
+        # Get fields for this table from field mappings
+        table_fields = self._get_fields_for_table(table_name)
+        field_definitions = self._build_field_definitions(table_fields)
+        
+        if not field_definitions:
+            print(f"    ⚠️  No valid fields for table '{table_name}' - skipping creation")
+            return
+        
+        # Connect to SQLite and create table
+        connection = sqlite3.connect(database_name, timeout=10)
+        cursor = connection.cursor()
+        
+        fields_sql = ', '.join(['dateTime INTEGER NOT NULL', 'station_id TEXT NOT NULL'] + field_definitions)
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql}, PRIMARY KEY (dateTime, station_id))"
+        
+        print(f"    DEBUG: SQLite SQL: {sql}")
+        cursor.execute(sql)
+        connection.commit()
+        connection.close()
+
+    def _create_table_mysql(self, table_name, mysql_config):
+        """Create table in MySQL database."""
+        try:
+            import MySQLdb
+        except ImportError:
+            try:
+                import pymysql as MySQLdb
+            except ImportError:
+                raise ImportError("MySQL support requires MySQLdb or PyMySQL")
+        
+        # Get MySQL connection details from WeeWX config
+        host = mysql_config.get('host', 'localhost')
+        user = mysql_config.get('user', 'weewx')
+        password = mysql_config.get('password', 'weewx')
+        database_name = mysql_config.get('database_name', 'weewx')
+        
+        print(f"    📋 Creating MySQL table in database: {database_name}")
+        
+        # Get fields for this table from field mappings
+        table_fields = self._get_fields_for_table(table_name)
+        field_definitions = self._build_field_definitions_mysql(table_fields)
+        
+        if not field_definitions:
+            print(f"    ⚠️  No valid fields for table '{table_name}' - skipping creation")
+            return
+        
+        # Connect to MySQL and create table
+        connection = MySQLdb.connect(
+            host=host,
+            user=user,
+            passwd=password,
+            db=database_name
+        )
+        cursor = connection.cursor()
+        
+        # MySQL-specific field definitions
+        fields_sql = ', '.join(['dateTime INT NOT NULL', 'station_id VARCHAR(20) NOT NULL'] + field_definitions)
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql}, PRIMARY KEY (dateTime, station_id))"
+        
+        print(f"    DEBUG: MySQL SQL: {sql}")
+        cursor.execute(sql)
+        connection.commit()
+        connection.close()
+
+    def _build_field_definitions(self, table_fields):
+        """Build SQLite field definitions from table fields."""
+        field_definitions = []
+        for field_config in table_fields.values():
+            db_field = field_config.get('database_field')
+            db_type = field_config.get('database_type', 'REAL')
+            if db_field:
+                # SQLite type mapping
+                if db_type.startswith('VARCHAR'):
+                    sqlite_type = 'TEXT'
+                else:
+                    sqlite_type = db_type
+                field_definitions.append(f"{db_field} {sqlite_type}")
+        return field_definitions
+
+    def _build_field_definitions_mysql(self, table_fields):
+        """Build MySQL field definitions from table fields."""
+        field_definitions = []
+        for field_config in table_fields.values():
+            db_field = field_config.get('database_field')
+            db_type = field_config.get('database_type', 'REAL')
+            if db_field:
+                # MySQL type mapping
+                if db_type == 'REAL':
+                    mysql_type = 'FLOAT'
+                elif db_type == 'INTEGER':
+                    mysql_type = 'INT'
+                elif db_type.startswith('VARCHAR'):
+                    mysql_type = db_type
+                else:
+                    mysql_type = 'TEXT'
+                field_definitions.append(f"{db_field} {mysql_type}")
+        return field_definitions
