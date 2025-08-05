@@ -1909,30 +1909,47 @@ class MarineDatabaseManager:
         
         return tables_needed
 
-    def _create_marine_tables(self, table_name):
-        """Create specific marine table with database-agnostic approach using WeeWX config."""
-        try:
-            # Get database configuration from WeeWX config
-            database_dict = self.config_dict.get('DatabaseTypes', {})
-            
-            # Determine database type from WeeWX configuration
-            databases_config = self.config_dict.get('Databases', {})
-            archive_database = databases_config.get('archive_database', 'archive_sqlite')
-            
-            if 'mysql' in archive_database.lower():
-                # MySQL configuration
-                mysql_config = database_dict.get('MySQL', {})
-                self._create_table_mysql(table_name, mysql_config)
-            else:
-                # SQLite configuration (default)
-                sqlite_config = database_dict.get('SQLite', {})
-                self._create_table_sqlite(table_name, sqlite_config)
-                
-            print(f"    ✅ Created table '{table_name}' using WeeWX database configuration")
-            
-        except Exception as e:
-            print(f"    ❌ Error creating table {table_name}: {e}")
-            raise
+    def _create_marine_tables(self, selected_options):
+        """Create marine tables based on user selections - CORRECTLY parsing selected_options."""
+        print("\n📊 MARINE DATABASE TABLE CREATION")
+        print("-" * 50)
+        
+        # Extract field selections from the passed dictionary
+        selected_fields = selected_options.get('fields', {})
+        
+        if not selected_fields or not any(selected_fields.values()):
+            print("⚠️  No fields selected - skipping table creation")
+            return
+        
+        # DATA-DRIVEN: Get field mappings from configuration to determine tables
+        field_mappings = self.config_dict.get('MarineDataService', {}).get('field_mappings', {})
+        required_tables = set()
+        
+        # Scan field mappings to find which tables are needed for selected fields
+        for module_name, module_fields in field_mappings.items():
+            if isinstance(module_fields, dict):
+                for service_field, field_config in module_fields.items():
+                    if isinstance(field_config, dict):
+                        # Check if this field was selected by user
+                        database_field = field_config.get('database_field', '')
+                        if any(database_field in selected_field for selected_field in selected_fields.keys() if selected_fields[selected_field]):
+                            # Get target table from field mapping configuration
+                            target_table = field_config.get('database_table', 'archive')
+                            if target_table != 'archive':
+                                required_tables.add(target_table)
+        
+        if not required_tables:
+            print("⚠️  No marine tables required for selected fields")
+            return
+        
+        print(f"📋 Creating {len(required_tables)} marine database tables: {list(required_tables)}")
+        
+        # Create each required table using the existing single table creation method
+        for table_name in required_tables:
+            print(f"  🔨 Creating table: {table_name}")
+            self._create_marine_table(table_name)
+        
+        print("✅ Marine database table creation completed")
 
     def _get_fields_for_table(self, table_name):
         """Get all fields that belong to a specific table from field mappings."""
