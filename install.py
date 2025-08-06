@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Siberian Tiger
+# Magic Animal: Bengal Tiger
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -637,7 +637,7 @@ class MarineDataConfigurator:
                             capabilities[capability] = True
 
             # Query station datums ONLY if station supports water level observations  
-            water_level_capability = coops_module.get('water_level_capability_name', 'water_level')
+            water_level_capability = coops_module.get('water_level_observed_capability_name', 'water_level_observed')
             if capabilities.get(water_level_capability, False) and datums_url_template:
                 datums_url = datums_url_template.format(station_id=station_id)
                 response = requests.get(datums_url, timeout=10)
