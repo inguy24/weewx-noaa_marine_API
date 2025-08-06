@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Harris's Hawk
+# Magic Animal: Falcon
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -1841,7 +1841,8 @@ class MarineDatabaseManager:
         print("✅ Marine database table creation completed")
 
     def _create_single_marine_table(self, table_name):
-        """Create specific marine table - FIXED database detection and table creation."""
+        """Create specific marine table - FIXED configuration corruption bug."""
+        
         try:
             # ISSUE 2 FIX: Proper WeeWX 5.1 database type detection
             databases_config = self.config_dict.get('Databases', {})
@@ -1869,8 +1870,12 @@ class MarineDatabaseManager:
                 # Get DatabaseTypes configuration for MySQL defaults
                 database_types = self.config_dict.get('DatabaseTypes', {})
                 mysql_defaults = database_types.get('MySQL', {})
-                mysql_defaults.update(mysql_config)  # Override with specific config
-                self._create_table_mysql(table_name, mysql_defaults)
+                
+                # CRITICAL FIX: Create a COPY instead of modifying the original config
+                mysql_connection_config = dict(mysql_defaults)  # Create copy
+                mysql_connection_config.update(mysql_config)    # Modify the copy only
+                
+                self._create_table_mysql(table_name, mysql_connection_config)
             else:
                 print(f"    📋 Creating SQLite table: {table_name}")
                 # Use SQLite configuration
@@ -1883,8 +1888,12 @@ class MarineDatabaseManager:
                 
                 database_types = self.config_dict.get('DatabaseTypes', {})
                 sqlite_defaults = database_types.get('SQLite', {})
-                sqlite_defaults.update(sqlite_config)
-                self._create_table_sqlite(table_name, sqlite_defaults)
+                
+                # CRITICAL FIX: Create a COPY instead of modifying the original config
+                sqlite_connection_config = dict(sqlite_defaults)  # Create copy
+                sqlite_connection_config.update(sqlite_config)    # Modify the copy only
+                
+                self._create_table_sqlite(table_name, sqlite_connection_config)
             
             print(f"    ✅ Created table '{table_name}'")
             
