@@ -5,6 +5,8 @@ api_modules:
     api_url: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
     metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail"
     station_info_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}.json"
+    products_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}/products.json"
+    datums_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}/datums.json"
     metadata_api_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations"
     metadata_datum_field: "referenceDatum"
     default_datum: "MLLW"
@@ -22,6 +24,55 @@ api_modules:
     config_module_name: "coops"
     interval_config_name: "coops_collection_interval"
     
+    # NEW: Capability detection configuration
+    product_capability_mapping:
+      water_level_observed: ["Water Level", "water_level", "Verified Water Levels", "Hourly Height"]
+      water_level_predicted: ["Predictions", "predictions", "Tide Predictions", "Harmonic Constituents"]
+      tide_predictions: ["Predictions", "predictions", "High/Low Tide Predictions"]
+      water_temperature: ["Water Temperature", "water_temperature", "water temp"]
+      air_temperature: ["Air Temperature", "air_temperature", "air temp"]
+      meteorological: ["Meteorological", "met", "Wind", "Barometric Pressure"]
+      currents: ["Currents", "current", "Current Speed"]
+    
+    # Station type mapping from NOAA API
+    station_type_mapping:
+      S: subordinate
+      R: reference
+      O: observation
+      unknown: observation
+    
+    # Datum requirements (which capabilities need datum information)
+    datum_requirements:
+      water_level_observed: true      # Only observed water level needs datums
+      water_level_predicted: false    # Predictions don't need datums
+      tide_predictions: false         # High/low predictions don't need datums
+      water_temperature: false
+      air_temperature: false
+      meteorological: false
+      currents: false
+    
+    # Prediction datum capabilities
+    prediction_datum_capabilities: ["water_level_predicted", "tide_predictions"]
+    
+    # Datum preference order for station selection
+    datum_preference_order: ["MLLW", "NAVD88", "MLW", "MSL", "MTL"]
+    
+    # Capability display names for GUI
+    display_capabilities:
+      water_level_observed: "Real-time Water Level"
+      water_level_predicted: "Predicted Water Level"
+      tide_predictions: "Tide Predictions"
+      water_temperature: "Water Temperature"
+      air_temperature: "Air Temperature"
+      meteorological: "Weather Data"
+      currents: "Current Data"
+    
+    # Field metadata
+    orthometric_datum_field: "OrthometricDatum"
+    water_level_observed_capability_name: "water_level_observed"
+    water_level_predicted_capability_name: "water_level_predicted"
+    tide_prediction_capability_name: "tide_predictions"
+    
   ndbc_module:
     display_name: "NOAA NDBC (Marine Buoys)"
     description: "Offshore marine weather, waves, sea surface temperature"
@@ -33,6 +84,15 @@ api_modules:
     retry_attempts: 3
     config_module_name: "ndbc"
     interval_config_name: "ndbc_collection_interval"
+    
+    # NEW: NDBC capabilities (file-based, all stations similar)
+    typical_capabilities:
+      - "Wave Height & Period"
+      - "Marine Weather"
+      - "Sea Surface Temperature"
+      - "Wind Speed & Direction"
+      - "Barometric Pressure"
+      - "Air Temperature"
 
 complexity_levels:
   minimal:
@@ -47,18 +107,21 @@ complexity_levels:
     description: "Complete marine dataset with all available parameters"
     target_field_count: 18
     includes: "All minimal fields plus detailed wave analysis, marine meteorology, water quality"
-    recommended_for: "Professional marine operations, research, comprehensive monitoring"
-    estimated_api_calls_per_day: 432
-    coverage: "Comprehensive marine and meteorological data"
+    recommended_for: "Research, commercial marine operations, comprehensive monitoring"
+    estimated_api_calls_per_day: 864
+    coverage: "Complete marine environmental monitoring"
     
   custom:
-    description: "User-selected specific marine parameters"
-    includes: "Interactive selection from all available fields organized by data source"
-    recommended_for: "Specialized applications, specific monitoring requirements"
-    coverage: "Varies based on user selection"
+    description: "User-selected fields for specific monitoring requirements"
+    target_field_count: "Variable"
+    includes: "User-specified subset of available marine parameters"
+    recommended_for: "Specialized applications, targeted monitoring"
+    estimated_api_calls_per_day: "Variable based on selection"
+    coverage: "Customized marine parameter monitoring"
 
+# Field definitions remain the same but with updated capability requirements
 fields:
-  # CO-OPS Module Fields
+  # CO-OPS Module Fields - Updated with capability requirements
   current_water_level:
     display_name: "Current water level"
     database_field: "marine_current_water_level"
@@ -71,9 +134,10 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Current observed water level relative to station datum"
+    required_capability: "water_level_observed"  # NEW: Links field to capability
     
   water_level_sigma:
-    display_name: "Water level measurement accuracy"
+    display_name: "Water level sigma"
     database_field: "marine_water_level_sigma"
     database_type: "REAL"
     database_table: "archive"
@@ -83,12 +147,13 @@ fields:
     unit_group: "group_distance"
     api_module: "coops_module"
     api_product: "water_level"
-    description: "Measurement accuracy estimate (±)"
+    description: "Standard deviation of water level measurements"
+    required_capability: "water_level_observed"  # NEW
     
   water_level_flags:
-    display_name: "Water level quality flags"
+    display_name: "Water level flags"
     database_field: "marine_water_level_flags"
-    database_type: "TEXT"
+    database_type: "VARCHAR(10)"
     database_table: "archive"
     api_path: "data[0].f"
     service_field: "water_level_flags"
@@ -96,7 +161,8 @@ fields:
     unit_group: "group_count"
     api_module: "coops_module"
     api_product: "water_level"
-    description: "Data quality control flags"
+    description: "Quality flags for water level data"
+    required_capability: "water_level_observed"  # NEW
     
   coastal_water_temp:
     display_name: "Coastal water temperature"
@@ -110,6 +176,7 @@ fields:
     api_module: "coops_module"
     api_product: "water_temperature"
     description: "Water temperature at coastal stations (limited availability)"
+    required_capability: "water_temperature"  # NEW
     
   next_high_time:
     display_name: "Next high tide time"
@@ -123,6 +190,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next high tide prediction"
+    required_capability: "tide_predictions"  # NEW
     
   next_high_level:
     display_name: "Next high tide level"
@@ -136,6 +204,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next high tide"
+    required_capability: "tide_predictions"  # NEW
     
   next_low_time:
     display_name: "Next low tide time"
@@ -149,6 +218,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next low tide prediction"
+    required_capability: "tide_predictions"  # NEW
     
   next_low_level:
     display_name: "Next low tide level"
@@ -162,8 +232,9 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next low tide"
+    required_capability: "tide_predictions"  # NEW
 
-  # NDBC Module Fields
+  # NDBC Module Fields - No capability requirements (all NDBC stations provide similar data)
   wave_height:
     display_name: "Significant wave height"
     database_field: "marine_wave_height"
@@ -184,7 +255,7 @@ fields:
     database_table: "archive"
     api_path: "DPD"
     service_field: "dominant_wave_period"
-    complexity_levels: ["all"]
+    complexity_levels: ["minimal", "all"]
     unit_group: "group_time"
     api_module: "ndbc_module"
     api_product: "stdmet"
@@ -201,7 +272,7 @@ fields:
     unit_group: "group_time"
     api_module: "ndbc_module"
     api_product: "stdmet"
-    description: "Average wave period"
+    description: "Mean wave period"
     
   marine_wind_direction:
     display_name: "Marine wind direction"
