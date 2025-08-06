@@ -119,14 +119,12 @@ complexity_levels:
     estimated_api_calls_per_day: "Variable based on selection"
     coverage: "Customized marine parameter monitoring"
 
-# Field definitions remain the same but with updated capability requirements
 fields:
-  # CO-OPS Module Fields - Updated with capability requirements
   current_water_level:
     display_name: "Current water level"
     database_field: "marine_current_water_level"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "coops_realtime"  # FIXED: was "archive"
     api_path: "data[0].v"
     service_field: "current_water_level"
     complexity_levels: ["minimal", "all"]
@@ -134,13 +132,13 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Current observed water level relative to station datum"
-    required_capability: "water_level_observed"  # NEW: Links field to capability
+    required_capability: "water_level_observed"
     
   water_level_sigma:
     display_name: "Water level sigma"
     database_field: "marine_water_level_sigma"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "coops_realtime"  # FIXED: was "archive"
     api_path: "data[0].s"
     service_field: "water_level_sigma"
     complexity_levels: ["all"]
@@ -148,13 +146,13 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Standard deviation of water level measurements"
-    required_capability: "water_level_observed"  # NEW
+    required_capability: "water_level_observed"
     
   water_level_flags:
     display_name: "Water level flags"
     database_field: "marine_water_level_flags"
     database_type: "VARCHAR(10)"
-    database_table: "archive"
+    database_table: "coops_realtime"  # FIXED: was "archive"
     api_path: "data[0].f"
     service_field: "water_level_flags"
     complexity_levels: ["all"]
@@ -162,13 +160,13 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Quality flags for water level data"
-    required_capability: "water_level_observed"  # NEW
+    required_capability: "water_level_observed"
     
   coastal_water_temp:
     display_name: "Coastal water temperature"
     database_field: "marine_coastal_water_temp"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "coops_realtime"  # FIXED: was "archive"
     api_path: "data[0].v"
     service_field: "coastal_water_temp"
     complexity_levels: ["minimal", "all"]
@@ -176,13 +174,13 @@ fields:
     api_module: "coops_module"
     api_product: "water_temperature"
     description: "Water temperature at coastal stations (limited availability)"
-    required_capability: "water_temperature"  # NEW
+    required_capability: "water_temperature"
     
   next_high_time:
     display_name: "Next high tide time"
     database_field: "marine_next_high_time"
     database_type: "TEXT"
-    database_table: "archive"
+    database_table: "coops_predictions"  # FIXED: was "archive"
     api_path: "predictions[0].t"
     service_field: "next_high_time"
     complexity_levels: ["minimal", "all"]
@@ -190,13 +188,13 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next high tide prediction"
-    required_capability: "tide_predictions"  # NEW
+    required_capability: "tide_predictions"
     
   next_high_level:
     display_name: "Next high tide level"
-    database_field: "marine_next_high_level"
+    database_field: "marine_next_high_height"  # Note: matches error message
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "coops_predictions"  # FIXED: was "archive"
     api_path: "predictions[0].v"
     service_field: "next_high_level"
     complexity_levels: ["minimal", "all"]
@@ -204,13 +202,13 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next high tide"
-    required_capability: "tide_predictions"  # NEW
+    required_capability: "tide_predictions"
     
   next_low_time:
     display_name: "Next low tide time"
     database_field: "marine_next_low_time"
     database_type: "TEXT"
-    database_table: "archive"
+    database_table: "coops_predictions"  # FIXED: was "archive"
     api_path: "predictions[1].t"
     service_field: "next_low_time"
     complexity_levels: ["minimal", "all"]
@@ -218,13 +216,13 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next low tide prediction"
-    required_capability: "tide_predictions"  # NEW
+    required_capability: "tide_predictions"
     
   next_low_level:
     display_name: "Next low tide level"
-    database_field: "marine_next_low_level"
+    database_field: "marine_next_low_height"  # Note: matches error message
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "coops_predictions"  # FIXED: was "archive"
     api_path: "predictions[1].v"
     service_field: "next_low_level"
     complexity_levels: ["minimal", "all"]
@@ -232,14 +230,28 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next low tide"
-    required_capability: "tide_predictions"  # NEW
+    required_capability: "tide_predictions"
 
-  # NDBC Module Fields - No capability requirements (all NDBC stations provide similar data)
+  tide_range:
+    display_name: "Tide range"
+    database_field: "marine_tide_range"
+    database_type: "REAL"
+    database_table: "coops_predictions"  # FIXED: was "archive"
+    api_path: "calculated"
+    service_field: "tide_range"
+    complexity_levels: ["all"]
+    unit_group: "group_distance"
+    api_module: "coops_module"
+    api_product: "predictions"
+    description: "Difference between high and low tide heights"
+    required_capability: "tide_predictions"
+
+  # NDBC Module Fields - FIXED database_table assignments
   wave_height:
     display_name: "Significant wave height"
     database_field: "marine_wave_height"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WVHT"
     service_field: "wave_height"
     complexity_levels: ["minimal", "all"]
@@ -250,9 +262,9 @@ fields:
     
   dominant_wave_period:
     display_name: "Dominant wave period"
-    database_field: "marine_dominant_wave_period"
+    database_field: "marine_wave_period"  # Note: matches error message
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "DPD"
     service_field: "dominant_wave_period"
     complexity_levels: ["minimal", "all"]
@@ -265,7 +277,7 @@ fields:
     display_name: "Average wave period"
     database_field: "marine_average_wave_period"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "APD"
     service_field: "average_wave_period"
     complexity_levels: ["all"]
@@ -276,9 +288,9 @@ fields:
     
   marine_wind_direction:
     display_name: "Marine wind direction"
-    database_field: "marine_wind_direction"
+    database_field: "marine_wave_direction"  # Note: might be wrong field name
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WDIR"
     service_field: "marine_wind_direction"
     complexity_levels: ["minimal", "all"]
@@ -291,7 +303,7 @@ fields:
     display_name: "Marine wind speed"
     database_field: "marine_wind_speed"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WSPD"
     service_field: "marine_wind_speed"
     complexity_levels: ["minimal", "all"]
@@ -304,7 +316,7 @@ fields:
     display_name: "Marine wind gust"
     database_field: "marine_wind_gust"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "GST"
     service_field: "marine_wind_gust"
     complexity_levels: ["all"]
@@ -317,7 +329,7 @@ fields:
     display_name: "Marine barometric pressure"
     database_field: "marine_barometric_pressure"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "PRES"
     service_field: "marine_barometric_pressure"
     complexity_levels: ["minimal", "all"]
@@ -330,7 +342,7 @@ fields:
     display_name: "Marine air temperature"
     database_field: "marine_air_temp"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "ATMP"
     service_field: "marine_air_temp"
     complexity_levels: ["minimal", "all"]
@@ -343,7 +355,7 @@ fields:
     display_name: "Sea surface temperature"
     database_field: "marine_sea_surface_temp"
     database_type: "REAL"
-    database_table: "archive"
+    database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WTMP"
     service_field: "marine_sea_surface_temp"
     complexity_levels: ["minimal", "all"]
@@ -351,6 +363,32 @@ fields:
     api_module: "ndbc_module"
     api_product: "stdmet"
     description: "Sea surface water temperature"
+
+  marine_visibility:
+    display_name: "Marine visibility"
+    database_field: "marine_visibility"
+    database_type: "REAL"
+    database_table: "ndbc_data"  # FIXED: was "archive" 
+    api_path: "VIS"
+    service_field: "marine_visibility"
+    complexity_levels: ["all"]
+    unit_group: "group_distance"
+    api_module: "ndbc_module"
+    api_product: "stdmet"
+    description: "Visibility at marine location"
+
+  marine_dewpoint:
+    display_name: "Marine dewpoint"
+    database_field: "marine_dewpoint"
+    database_type: "REAL"
+    database_table: "ndbc_data"  # FIXED: was "archive"
+    api_path: "DEWP"
+    service_field: "marine_dewpoint"
+    complexity_levels: ["all"]
+    unit_group: "group_temperature"
+    api_module: "ndbc_module"
+    api_product: "stdmet"
+    description: "Dewpoint temperature at marine location"
 
 database_schemas:
   coops_data:
