@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Black Mamba
+# Magic Animal: Amur Tiger
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -638,7 +638,8 @@ class MarineDataConfigurator:
 
             # Query station datums ONLY if station supports water level observations  
             water_level_capability = coops_module.get('water_level_observed_capability_name', 'water_level_observed')
-            if capabilities.get(water_level_capability, False) and datums_url_template:
+            has_datum_product = 'datums' in capabilities.get('products', [])
+            if (capabilities.get(water_level_capability, False) or has_datum_product) and datums_url_template:
                 datums_url = datums_url_template.format(station_id=station_id)
                 response = requests.get(datums_url, timeout=10)
                 
@@ -2213,11 +2214,7 @@ class MarineDataConfigurator:
                 warnings.append("⚠️ No water level data")
             if capabilities.get('station_type') == 'subordinate':
                 warnings.append("ℹ️ Subordinate station (limited data)")
-            
-            # Check for datum information more precisely
-            supported_datums = capabilities.get('supported_datums', [])
-            primary_datum = capabilities.get('primary_datum')
-            if not supported_datums or not primary_datum:
+            if not capabilities.get('supported_datums') or not capabilities.get('primary_datum'):
                 warnings.append("⚠️ No datum information")
         
         detail_lines = [location_line, capability_line]
