@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Elephant
+# Magic Animal: Siberian Tiger
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -519,10 +519,13 @@ class MarineDataConfigurator:
                     else:  # reference station
                         capabilities = ['Tide Predictions', 'Reference Station']
                     
-                    station_datum = self._query_station_datum(station_id)
+                    station_capabilities = self._detect_coops_station_capabilities(station_id)
                     
                     # Only include stations where NOAA provides datum information
-                    if station_datum:
+                    if station_capabilities and station_capabilities.get('supported_datums'):
+                        # Get primary datum using the existing selection method
+                        primary_datum = self._select_best_coops_datum(station_capabilities.get('supported_datums', []))
+                        
                         station_info = {
                             'id': station_id,
                             'name': name,
@@ -532,16 +535,17 @@ class MarineDataConfigurator:
                             'bearing': bearing_deg,
                             'bearing_text': bearing_text,
                             'state': state,
-                            'capabilities': capabilities,
                             'type': 'coops',
-                            'station_type': station_type,
-                            'datum': station_datum  # Store NOAA-provided datum
+                            'station_type': station_capabilities.get('station_type', 'observation'),
+                            'capabilities': station_capabilities,  # Store COMPLETE capabilities
+                            'primary_datum': primary_datum,        # Store selected primary datum
+                            'supported_datums': station_capabilities.get('supported_datums', [])
                         }
                         
-                        print(f"    📍 {station_id}: Using NOAA datum {station_datum}")
+                        print(f"    📍 {station_id}: Using NOAA datum {primary_datum}, capabilities detected")
                         processed_stations.append(station_info)
                     else:
-                        print(f"    🚫 Excluding {station_id} - no datum information from NOAA")
+                        print(f"    🚫 Excluding {station_id} - no capabilities or datum information from NOAA")
                     
             except (ValueError, KeyError, TypeError):
                 continue  # Skip invalid stations
