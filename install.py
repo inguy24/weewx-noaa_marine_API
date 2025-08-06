@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Amur Tiger
+# Magic Animal: Baboon
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -2791,7 +2791,7 @@ class MarineDatabaseManager:
         return table_fields
     
     def _create_table_sqlite(self, table_name, sqlite_config):
-        """Create table in SQLite database - FIXED with proper field definitions."""
+        """Create table in SQLite database - FIXED with proper field definitions and verification."""
         import sqlite3
         
         # Get SQLite database path from WeeWX config
@@ -2810,10 +2810,13 @@ class MarineDatabaseManager:
         if not table_fields:
             print(f"    ⚠️  No fields found for table '{table_name}' - using minimal schema")
             # Minimal table with just primary keys
+            expected_columns = {'dateTime': 'INTEGER', 'station_id': 'TEXT'}
             fields_sql = "dateTime INTEGER NOT NULL, station_id TEXT NOT NULL, PRIMARY KEY (dateTime, station_id)"
         else:
             # Build field definitions from actual configuration
+            expected_columns = {'dateTime': 'INTEGER', 'station_id': 'TEXT'}  # Always include primary keys
             field_definitions = []
+            
             for field_name, field_type in table_fields.items():
                 # SQLite type mapping
                 if field_type.startswith('VARCHAR') or field_type == 'TEXT':
@@ -2826,26 +2829,85 @@ class MarineDatabaseManager:
                     sqlite_type = 'REAL'  # Default for marine data
                 
                 field_definitions.append(f"{field_name} {sqlite_type}")
+                expected_columns[field_name] = sqlite_type
             
             # Combine with primary keys
             all_fields = ['dateTime INTEGER NOT NULL', 'station_id TEXT NOT NULL'] + field_definitions
             fields_sql = ', '.join(all_fields) + ', PRIMARY KEY (dateTime, station_id)'
         
-        # Create table
+        # Connect to database
         connection = sqlite3.connect(database_name, timeout=10)
         cursor = connection.cursor()
         
-        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql})"
-        
-        print(f"    DEBUG: SQLite SQL: {sql}")
-        cursor.execute(sql)
-        connection.commit()
-        connection.close()
-        
-        print(f"    ✅ SQLite table '{table_name}' created with {len(table_fields)} fields")
+        try:
+            # Check if table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+            table_exists = cursor.fetchone() is not None
+            
+            if table_exists:
+                print(f"    📋 Table '{table_name}' already exists - checking columns")
+                
+                # Get existing columns
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                existing_columns = {}
+                for row in cursor.fetchall():
+                    col_name = row[1]  # Column name
+                    col_type = row[2]  # Column type
+                    existing_columns[col_name] = col_type
+                
+                # Find missing columns
+                missing_columns = []
+                for expected_col, expected_type in expected_columns.items():
+                    if expected_col not in existing_columns:
+                        missing_columns.append((expected_col, expected_type))
+                
+                # Add missing columns
+                if missing_columns:
+                    print(f"    🔧 Adding {len(missing_columns)} missing columns to '{table_name}'")
+                    for col_name, col_type in missing_columns:
+                        alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+                        print(f"      Adding: {col_name} ({col_type})")
+                        cursor.execute(alter_sql)
+                else:
+                    print(f"    ✅ All columns already exist in '{table_name}'")
+            else:
+                # Create new table
+                print(f"    🔨 Creating new table '{table_name}'")
+                sql = f"CREATE TABLE {table_name} ({fields_sql})"
+                print(f"    DEBUG: SQLite SQL: {sql}")
+                cursor.execute(sql)
+            
+            connection.commit()
+            
+            # VERIFICATION STEP: Confirm all expected columns exist
+            print(f"    🔍 Verifying table '{table_name}' structure")
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            final_columns = {}
+            for row in cursor.fetchall():
+                col_name = row[1]
+                col_type = row[2]
+                final_columns[col_name] = col_type
+            
+            # Check all expected columns are present
+            verification_success = True
+            missing_after_creation = []
+            for expected_col, expected_type in expected_columns.items():
+                if expected_col not in final_columns:
+                    missing_after_creation.append(expected_col)
+                    verification_success = False
+            
+            if verification_success:
+                print(f"    ✅ VERIFIED: SQLite table '{table_name}' has all {len(final_columns)} expected columns")
+                print(f"    📊 Columns: {list(final_columns.keys())}")
+            else:
+                print(f"    ❌ VERIFICATION FAILED: Missing columns in '{table_name}': {missing_after_creation}")
+                raise Exception(f"Table verification failed - missing columns: {missing_after_creation}")
+                
+        finally:
+            connection.close()
 
     def _create_table_mysql(self, table_name, mysql_config):
-        """Create table in MySQL database - FIXED with proper field definitions."""
+        """Create table in MySQL database - FIXED with proper field definitions and verification."""
         try:
             import MySQLdb
         except ImportError:
@@ -2868,10 +2930,13 @@ class MarineDatabaseManager:
         if not table_fields:
             print(f"    ⚠️  No fields found for table '{table_name}' - using minimal schema")
             # Minimal table with just primary keys
+            expected_columns = {'dateTime': 'INT', 'station_id': 'VARCHAR(20)'}
             fields_sql = "dateTime INT NOT NULL, station_id VARCHAR(20) NOT NULL, PRIMARY KEY (dateTime, station_id)"
         else:
             # Build field definitions from actual configuration
+            expected_columns = {'dateTime': 'INT', 'station_id': 'VARCHAR(20)'}  # Always include primary keys
             field_definitions = []
+            
             for field_name, field_type in table_fields.items():
                 # MySQL type mapping
                 if field_type.startswith('VARCHAR'):
@@ -2886,12 +2951,13 @@ class MarineDatabaseManager:
                     mysql_type = 'FLOAT'  # Default for marine data
                 
                 field_definitions.append(f"{field_name} {mysql_type}")
+                expected_columns[field_name] = mysql_type
             
             # Combine with primary keys
             all_fields = ['dateTime INT NOT NULL', 'station_id VARCHAR(20) NOT NULL'] + field_definitions
             fields_sql = ', '.join(all_fields) + ', PRIMARY KEY (dateTime, station_id)'
         
-        # Create table
+        # Connect to database
         connection = MySQLdb.connect(
             host=host,
             user=user,
@@ -2900,14 +2966,72 @@ class MarineDatabaseManager:
         )
         cursor = connection.cursor()
         
-        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql})"
-        
-        print(f"    DEBUG: MySQL SQL: {sql}")
-        cursor.execute(sql)
-        connection.commit()
-        connection.close()
-        
-        print(f"    ✅ MySQL table '{table_name}' created with {len(table_fields)} fields")
+        try:
+            # Check if table exists
+            cursor.execute("SHOW TABLES LIKE %s", (table_name,))
+            table_exists = cursor.fetchone() is not None
+            
+            if table_exists:
+                print(f"    📋 Table '{table_name}' already exists - checking columns")
+                
+                # Get existing columns
+                cursor.execute(f"DESCRIBE {table_name}")
+                existing_columns = {}
+                for row in cursor.fetchall():
+                    col_name = row[0]  # Column name
+                    col_type = row[1]  # Column type
+                    existing_columns[col_name] = col_type
+                
+                # Find missing columns
+                missing_columns = []
+                for expected_col, expected_type in expected_columns.items():
+                    if expected_col not in existing_columns:
+                        missing_columns.append((expected_col, expected_type))
+                
+                # Add missing columns
+                if missing_columns:
+                    print(f"    🔧 Adding {len(missing_columns)} missing columns to '{table_name}'")
+                    for col_name, col_type in missing_columns:
+                        alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+                        print(f"      Adding: {col_name} ({col_type})")
+                        cursor.execute(alter_sql)
+                else:
+                    print(f"    ✅ All columns already exist in '{table_name}'")
+            else:
+                # Create new table
+                print(f"    🔨 Creating new table '{table_name}'")
+                sql = f"CREATE TABLE {table_name} ({fields_sql})"
+                print(f"    DEBUG: MySQL SQL: {sql}")
+                cursor.execute(sql)
+            
+            connection.commit()
+            
+            # VERIFICATION STEP: Confirm all expected columns exist
+            print(f"    🔍 Verifying table '{table_name}' structure")
+            cursor.execute(f"DESCRIBE {table_name}")
+            final_columns = {}
+            for row in cursor.fetchall():
+                col_name = row[0]
+                col_type = row[1]
+                final_columns[col_name] = col_type
+            
+            # Check all expected columns are present
+            verification_success = True
+            missing_after_creation = []
+            for expected_col, expected_type in expected_columns.items():
+                if expected_col not in final_columns:
+                    missing_after_creation.append(expected_col)
+                    verification_success = False
+            
+            if verification_success:
+                print(f"    ✅ VERIFIED: MySQL table '{table_name}' has all {len(final_columns)} expected columns")
+                print(f"    📊 Columns: {list(final_columns.keys())}")
+            else:
+                print(f"    ❌ VERIFICATION FAILED: Missing columns in '{table_name}': {missing_after_creation}")
+                raise Exception(f"Table verification failed - missing columns: {missing_after_creation}")
+                
+        finally:
+            connection.close()
 
     def _build_field_definitions(self, table_fields):
         """Build SQLite field definitions from table fields."""
