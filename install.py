@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Falcon
+# Magic Animal: Maltese Falcon
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -286,8 +286,8 @@ class MarineDataConfigurator:
     
     def _discover_coops_stations(self, user_lat, user_lon, max_distance_km):
         """
-        Discover CO-OPS stations including both observation and reference stations.
-        FIXED: Proper limiting to 10 stations within 250km max.
+        Discover CO-OPS stations with COMPLETE capability detection.
+        REPLACES the broken method that used fake capabilities and minimal datum queries.
         """
         all_stations = []
         
@@ -299,7 +299,7 @@ class MarineDataConfigurator:
         coops_module = api_modules.get('coops_module', {})
         
         try:
-            # Query observation stations
+            # Query observation stations from NOAA
             obs_url = coops_module.get('metadata_url', 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail')
             print(f"  📡 Querying CO-OPS observation stations...")
             response = requests.get(obs_url, timeout=30)
@@ -308,7 +308,9 @@ class MarineDataConfigurator:
             obs_data = response.json()
             obs_stations = obs_data.get('stations', [])
             
-            # Process observation stations with distance filtering
+            print(f"  📊 Processing {len(obs_stations)} observation stations with capability detection...")
+            
+            # Process observation stations with FULL capability detection
             for station in obs_stations:
                 try:
                     station_id = station.get('id', '')
@@ -317,39 +319,63 @@ class MarineDataConfigurator:
                     name = station.get('name', 'Unknown Station')
                     state = station.get('state', 'Unknown')
                     
-                    # Calculate distance
+                    # Calculate distance - filter early to avoid unnecessary API calls
                     distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    if distance_km > search_distance:
+                        continue  # Skip stations outside search radius
                     
-                    # Apply distance filter immediately
-                    if distance_km <= search_distance:
-                        bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
-                        bearing_text = self._bearing_to_text(bearing_deg)
-                        
-                        capabilities = ['Water Level', 'Real-time Data']
-                        if station.get('tidal', False):
-                            capabilities.append('Tide Predictions')
-                        
-                        station_datum = self._query_station_datum(station_id)
-                        
-                        if station_datum:  # Only include stations with datum info
-                            station_info = {
-                                'id': station_id,
-                                'name': name,
-                                'lat': lat,
-                                'lon': lon,
-                                'distance_km': distance_km,
-                                'bearing': bearing_deg,
-                                'bearing_text': bearing_text,
-                                'state': state,
-                                'capabilities': capabilities,
-                                'type': 'coops',
-                                'station_type': 'observation',
-                                'datum': station_datum
-                            }
-                            all_stations.append(station_info)
-                            print(f"    📍 {station_id}: {distance_km:.1f}km, datum {station_datum}")
-                            
-                except (ValueError, KeyError, TypeError):
+                    # CAPABILITY DETECTION: Replace fake capabilities with real NOAA API detection
+                    station_capabilities = self._detect_coops_station_capabilities(station_id)
+                    
+                    # Include ALL stations that have any capabilities detected - let user decide usefulness
+                    if not station_capabilities:
+                        print(f"    🚫 Excluding {station_id} - capability detection failed")
+                        continue
+                        print(f"    🚫 Excluding {station_id} - no supported data products")
+                        continue
+                    
+                    # Calculate bearing and direction
+                    bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                    bearing_text = self._bearing_to_text(bearing_deg)
+                    
+                    # Build station info with REAL capabilities
+                    station_info = {
+                        'id': station_id,
+                        'name': name,
+                        'lat': lat,
+                        'lon': lon,
+                        'distance_km': distance_km,
+                        'bearing': bearing_deg,
+                        'bearing_text': bearing_text,
+                        'state': state,
+                        'type': 'coops',
+                        'station_type': station_capabilities.get('station_type', 'observation'),
+                        'capabilities': station_capabilities,  # Store COMPLETE capabilities
+                        'primary_datum': station_capabilities.get('primary_datum', 'MLLW'),
+                        'supported_products': station_capabilities.get('products', []),
+                        'supported_datums': station_capabilities.get('supported_datums', [])
+                    }
+                    
+                    all_stations.append(station_info)
+                    
+                    # Display capability summary using YAML-driven capability names
+                    cap_summary = []
+                    display_capabilities = coops_module.get('display_capabilities', {
+                        'water_level_observed': 'Observed Water Level',
+                        'water_level_predicted': 'Predicted Water Level', 
+                        'tide_predictions': 'Tide Predictions',
+                        'water_temperature': 'Water Temp',
+                        'meteorological': 'Met Data'
+                    })
+                    
+                    for cap_key, cap_display in display_capabilities.items():
+                        if station_capabilities.get(cap_key, False):
+                            cap_summary.append(cap_display)
+                    
+                    print(f"    📍 {station_id}: {distance_km:.1f}km, {', '.join(cap_summary)}, datum: {station_capabilities.get('primary_datum', 'MLLW')}")
+                    
+                except (ValueError, KeyError, TypeError) as e:
+                    print(f"    ⚠️  Error processing observation station {station.get('id', 'unknown')}: {e}")
                     continue
             
             # Query reference stations (for tide predictions)
@@ -361,7 +387,9 @@ class MarineDataConfigurator:
             ref_data = response.json()
             ref_stations = ref_data.get('stations', [])
             
-            # Process reference stations with distance filtering
+            print(f"  📊 Processing {len(ref_stations)} reference stations with capability detection...")
+            
+            # Process reference stations with FULL capability detection
             for station in ref_stations:
                 try:
                     station_id = station.get('id', '')
@@ -370,49 +398,68 @@ class MarineDataConfigurator:
                     name = station.get('name', 'Unknown Station')
                     state = station.get('state', 'Unknown')
                     
-                    # Calculate distance
+                    # Calculate distance - filter early
                     distance_km = self._calculate_distance(user_lat, user_lon, lat, lon)
+                    if distance_km > search_distance:
+                        continue
                     
-                    # Apply distance filter immediately
-                    if distance_km <= search_distance:
-                        # Check if we already have this station from observations
-                        existing_station = next((s for s in all_stations if s['id'] == station_id), None)
-                        
-                        if existing_station:
-                            # Merge capabilities
-                            if 'Tide Predictions' not in existing_station['capabilities']:
-                                existing_station['capabilities'].append('Tide Predictions')
-                            existing_station['station_type'] = 'observation+reference'
-                        else:
-                            # Add as new reference station
-                            bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
-                            bearing_text = self._bearing_to_text(bearing_deg)
-                            
-                            capabilities = ['Tide Predictions', 'Reference Station']
-                            station_datum = self._query_station_datum(station_id)
-                            
-                            if station_datum:
-                                station_info = {
-                                    'id': station_id,
-                                    'name': name,
-                                    'lat': lat,
-                                    'lon': lon,
-                                    'distance_km': distance_km,
-                                    'bearing': bearing_deg,
-                                    'bearing_text': bearing_text,
-                                    'state': state,
-                                    'capabilities': capabilities,
-                                    'type': 'coops',
-                                    'station_type': 'reference',
-                                    'datum': station_datum
-                                }
-                                all_stations.append(station_info)
-                                print(f"    📍 {station_id}: {distance_km:.1f}km, datum {station_datum}")
-                                
-                except (ValueError, KeyError, TypeError):
+                    # Skip if we already have this station from observation stations
+                    if any(s['id'] == station_id for s in all_stations):
+                        # Merge prediction capability into existing station
+                        existing_station = next(s for s in all_stations if s['id'] == station_id)
+                        if 'Tide Predictions' not in existing_station.get('capabilities', {}).get('products', []):
+                            existing_station['capabilities']['tide_predictions'] = True
+                            print(f"    🔄 Updated {station_id}: Added tide prediction capability")
+                        continue
+                    
+                    # CAPABILITY DETECTION: Replace fake capabilities with real NOAA API detection
+                    station_capabilities = self._detect_coops_station_capabilities(station_id)
+                    
+                    # Reference stations should have capabilities detected - let user decide usefulness  
+                    if not station_capabilities:
+                        print(f"    🚫 Excluding reference station {station_id} - capability detection failed")
+                        continue
+                    
+                    # Calculate bearing and direction
+                    bearing_deg = self._calculate_bearing(user_lat, user_lon, lat, lon)
+                    bearing_text = self._bearing_to_text(bearing_deg)
+                    
+                    # Build station info with REAL capabilities
+                    station_info = {
+                        'id': station_id,
+                        'name': name,
+                        'lat': lat,
+                        'lon': lon,
+                        'distance_km': distance_km,
+                        'bearing': bearing_deg,
+                        'bearing_text': bearing_text,
+                        'state': state,
+                        'type': 'coops',
+                        'station_type': station_capabilities.get('station_type', 'reference'),
+                        'capabilities': station_capabilities,  # Store COMPLETE capabilities
+                        'primary_datum': station_capabilities.get('primary_datum', 'MLLW'),
+                        'supported_products': station_capabilities.get('products', []),
+                        'supported_datums': station_capabilities.get('supported_datums', [])
+                    }
+                    
+                    all_stations.append(station_info)
+                    
+                    # Display capability summary
+                    cap_summary = []
+                    if station_capabilities.get('water_level', False):
+                        cap_summary.append('Water Level')
+                    if station_capabilities.get('tide_predictions', False):
+                        cap_summary.append('Predictions')
+                    if station_capabilities.get('water_temperature', False):
+                        cap_summary.append('Water Temp')
+                    
+                    print(f"    📍 {station_id}: {distance_km:.1f}km, {', '.join(cap_summary)}, datum: {station_capabilities.get('primary_datum', 'MLLW')}")
+                    
+                except (ValueError, KeyError, TypeError) as e:
+                    print(f"    ⚠️  Error processing reference station {station.get('id', 'unknown')}: {e}")
                     continue
             
-            # CRITICAL FIX: Apply hard limits - remove duplicates, sort by distance, limit to 10
+            # FINAL PROCESSING: Remove duplicates, sort by distance, apply limits
             unique_stations = {}
             for station in all_stations:
                 station_id = station['id']
@@ -423,11 +470,26 @@ class MarineDataConfigurator:
             result.sort(key=lambda x: x['distance_km'])  # Sort by distance
             result = result[:10]  # HARD LIMIT to 10 stations
             
-            print(f"  ✅ Found {len(result)} CO-OPS stations (limited to 10 closest within {search_distance}km)")
+            # Store station capabilities in configuration for service runtime
+            stations_with_capabilities = [s for s in result if s.get('capabilities')]
+            if stations_with_capabilities:
+                self._store_coops_station_capabilities_in_config(stations_with_capabilities)
+            
+            print(f"  ✅ Found {len(result)} CO-OPS stations with verified capabilities (limited to 10 closest within {search_distance}km)")
+            
+            # Summary of capabilities found
+            water_level_count = sum(1 for s in result if s.get('capabilities', {}).get('water_level', False))
+            prediction_count = sum(1 for s in result if s.get('capabilities', {}).get('tide_predictions', False))
+            temp_count = sum(1 for s in result if s.get('capabilities', {}).get('water_temperature', False))
+            
+            print(f"    📊 Capability summary: {water_level_count} water level, {prediction_count} predictions, {temp_count} water temperature")
+            
             return result
-                
+            
         except Exception as e:
             print(f"  ❌ CO-OPS station discovery failed: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def _process_coops_stations(self, stations, user_lat, user_lon, max_distance_km, station_type):
@@ -486,32 +548,125 @@ class MarineDataConfigurator:
         
         return processed_stations
 
-    def _query_station_datum(self, station_id):
-        """Query individual station for datum information."""
+    def _detect_coops_station_capabilities(self, station_id):
+        """
+        Query NOAA CO-OPS API to detect what data products a CO-OPS station actually supports.
+        This method is ONLY for CO-OPS stations, NOT for NDBC buoy stations.
+        COMPLETELY DATA-DRIVEN from YAML configuration.
+        
+        Args:
+            station_id (str): CO-OPS station ID (e.g., '9410660')
+        
+        Returns:
+            dict: CO-OPS station capabilities with supported products and datums
+        """
+        # Initialize capabilities structure from YAML
+        api_modules = self.yaml_data.get('api_modules', {})
+        coops_module = api_modules.get('coops_module', {})
+        
+        # Get capability structure from YAML
+        product_capability_mapping = coops_module.get('product_capability_mapping', {})
+        
+        # Initialize capabilities based on YAML mapping keys
+        capabilities = {
+            'supported_datums': [],
+            'prediction_datums': [],
+            'products': [],
+            'station_type': 'unknown'
+        }
+        
+        # Add all capability types from YAML mapping
+        for capability_name in product_capability_mapping.keys():
+            capabilities[capability_name] = False
+
         try:
-            # Get station info URL from YAML
-            api_modules = self.yaml_data.get('api_modules', {})
-            coops_module = api_modules.get('coops_module', {})
-            station_info_url = coops_module.get('station_info_url', 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}.json')
+            # Get URLs from YAML configuration - NO HARDCODING
+            station_info_url_template = coops_module.get('station_info_url')
+            products_url_template = coops_module.get('products_url')
+            datums_url_template = coops_module.get('datums_url')
             
-            url = station_info_url.format(station_id=station_id)
-            response = requests.get(url, timeout=10)
+            if not all([station_info_url_template, products_url_template]):
+                print(f"    ❌ Missing URL templates in YAML for capability detection")
+                return capabilities
+            
+            # Query basic station info to determine type
+            station_url = station_info_url_template.format(station_id=station_id)
+            response = requests.get(station_url, timeout=10)
             
             if response.status_code == 200:
                 station_data = response.json()
                 stations = station_data.get('stations', [])
                 if stations:
                     station = stations[0]
-                    datum_field = coops_module.get('metadata_datum_field', 'referenceDatum')
-                    datum = station.get(datum_field, coops_module.get('default_datum', 'MLLW'))
-                    return datum
+                    station_type = station.get('type', 'unknown')
+                    
+                    # Get station type mapping from YAML
+                    station_type_mapping = coops_module.get('station_type_mapping', {
+                        'S': 'subordinate',
+                        'R': 'reference', 
+                        'O': 'observation'
+                    })
+                    
+                    capabilities['station_type'] = station_type_mapping.get(station_type, 'observation')
+                    
+                    # Check if it's a tidal station
+                    is_tidal = station.get('tidal', False)
+                    tide_prediction_capability = coops_module.get('tide_prediction_capability_name', 'tide_predictions')
+                    if is_tidal and tide_prediction_capability in capabilities:
+                        capabilities[tide_prediction_capability] = True
             
-            # Fallback to default datum
-            return coops_module.get('default_datum', 'MLLW')
+            # Query station products endpoint for detailed capabilities
+            products_url = products_url_template.format(station_id=station_id)
+            response = requests.get(products_url, timeout=10)
+            
+            if response.status_code == 200:
+                products_data = response.json()
+                products = products_data.get('products', [])
+                
+                for product in products:
+                    product_name = product.get('name', '').lower()
+                    capabilities['products'].append(product_name)
+                    
+                    # Use YAML-driven product mapping
+                    for capability, product_keywords in product_capability_mapping.items():
+                        if any(keyword.lower() in product_name for keyword in product_keywords):
+                            capabilities[capability] = True
+
+            # Query station datums ONLY if station supports water level observations  
+            water_level_capability = coops_module.get('water_level_capability_name', 'water_level')
+            if capabilities.get(water_level_capability, False) and datums_url_template:
+                datums_url = datums_url_template.format(station_id=station_id)
+                response = requests.get(datums_url, timeout=10)
+                
+                if response.status_code == 200:
+                    datums_data = response.json()
+                    datums = datums_data.get('datums', [])
+                    
+                    # Extract available datum names
+                    for datum in datums:
+                        datum_name = datum.get('name', '')
+                        if datum_name:
+                            capabilities['supported_datums'].append(datum_name)
+                    
+                    # Also check OrthometricDatum from YAML field mapping
+                    ortho_datum_field = coops_module.get('orthometric_datum_field', 'OrthometricDatum')
+                    ortho_datum = datums_data.get(ortho_datum_field)
+                    if ortho_datum and ortho_datum not in capabilities['supported_datums']:
+                        capabilities['supported_datums'].append(ortho_datum)
+            
+            # For tide predictions, check if prediction datums are different
+            tide_prediction_capability = coops_module.get('tide_prediction_capability_name', 'tide_predictions')
+            if capabilities.get(tide_prediction_capability, False):
+                # Some stations may have different datums for predictions vs observations
+                prediction_datums = coops_module.get('prediction_datums', capabilities['supported_datums'])
+                capabilities['prediction_datums'] = prediction_datums
+            
+            print(f"    📊 Station {station_id} capabilities: {capabilities}")
+            return capabilities
             
         except Exception as e:
-            print(f"    Warning: Could not query datum for {station_id}: {e}")
-            return None
+            print(f"    ⚠️  Could not detect capabilities for station {station_id}: {e}")
+            return capabilities
 
     def _discover_ndbc_stations(self, user_lat, user_lon, max_distance_km):
         """Discover NDBC stations using YAML-configured URL - NO hardcoded URLs."""
@@ -840,8 +995,9 @@ class MarineDataConfigurator:
             # Fallback to simple text interface
             return self._simple_station_selection(coops_stations, ndbc_stations)
 
-    def _curses_station_selection(self, stations, title, icon):
-        """Curses-based station selection interface with user-friendly explanations and proper formatting."""
+    def _curses_coops_station_selection(self, stations, title, icon):
+        """Updated curses CO-OPS station selection with proper capability display.
+        CO-OPS ONLY - not for NDBC stations."""
         
         if not stations:
             return []
@@ -855,6 +1011,7 @@ class MarineDataConfigurator:
                 curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Header
                 curses.init_pair(2, curses.COLOR_GREEN, -1)  # Selected
                 curses.init_pair(3, curses.COLOR_YELLOW, -1)  # Highlighted
+                curses.init_pair(4, curses.COLOR_RED, -1)     # Warnings
             
             marked = set()  # Track selected stations
             current_pos = 0  # Current cursor position
@@ -868,16 +1025,19 @@ class MarineDataConfigurator:
                 header_text = f"{icon} {title}"
                 try:
                     stdscr.addstr(0, (width - len(header_text)) // 2, header_text, 
-                                 curses.color_pair(1) | curses.A_BOLD)
+                                curses.color_pair(1) | curses.A_BOLD)
                     stdscr.addstr(1, (width - len(header_text)) // 2, "=" * len(header_text))
                 except curses.error:
                     pass
                 
-                # Marine-specific explanation  
+                # Enhanced explanation with capability guidance
                 explanation = [
                     "Select marine monitoring stations for data collection.",
-                    "Each station provides different types of marine data.",
-                    "TIP: Choose 2-3 stations for backup coverage."
+                    "🔍 Review capabilities carefully - not all stations provide all data types.",
+                    "💡 Real-time Water Level: Live sensor measurements",
+                    "💡 Predicted Water Level: Mathematical tide calculations", 
+                    "💡 Subordinate stations: Limited to predictions only",
+                    "🎯 TIP: Choose 2-3 stations with different capabilities for backup coverage."
                 ]
                 
                 # Explanation section
@@ -885,37 +1045,44 @@ class MarineDataConfigurator:
                 for i, line in enumerate(explanation):
                     if exp_start + i < height - 12:
                         try:
-                            stdscr.addstr(exp_start + i, 0, line[:width-1], curses.A_DIM)
+                            color = curses.A_DIM
+                            if line.startswith('💡'):
+                                color = curses.color_pair(3)
+                            elif line.startswith('🎯'):
+                                color = curses.color_pair(2)
+                            stdscr.addstr(exp_start + i, 0, line[:width-1], color)
                         except curses.error:
                             pass
                 
                 # Instructions
                 inst_row = exp_start + len(explanation) + 1
                 try:
-                    stdscr.addstr(inst_row, 0, "SPACE: Toggle selection  |  ENTER: Confirm  |  ESC: Skip  |  q: Quit"[:width-1])
+                    stdscr.addstr(inst_row, 0, "SPACE: Toggle  |  ENTER: Confirm  |  ESC: Skip  |  ↑/↓: Navigate  |  q: Quit"[:width-1])
                     stdscr.addstr(inst_row + 1, 0, "-" * min(70, width-1))
                 except curses.error:
                     pass
                 
-                # Station list - Show up to 10 stations (design limit)
+                # Station list - Enhanced display with capability details
                 start_row = inst_row + 3
-                available_rows = max(1, (height - start_row - 3) // 2)
+                available_rows = max(1, (height - start_row - 3) // 4)  # 4 lines per station now
                 max_display = min(10, available_rows)
                 display_stations = stations[:max_display] if stations else []
                 
                 for idx, station in enumerate(display_stations):
-                    y = start_row + (idx * 2)
-                    if y >= height - 3:
+                    y = start_row + (idx * 4)  # 4 lines per station
+                    if y >= height - 4:
                         break
                     
-                    # Format station line
-                    mark = "[X]" if idx in marked else "[ ]"
-                    distance = f"{station.get('distance_km', 0):.1f}km"
+                    # Get formatted CO-OPS station information
+                    summary, detail_lines = self._get_detailed_coops_station_info_for_display(station)
                     
-                    # Main station line
-                    station_line = f"{mark} {station['id']} - {station['name']}"
-                    if len(station_line) > width - 15:
-                        station_line = station_line[:width-18] + "..."
+                    # Selection marker
+                    mark = "[X]" if idx in marked else "[ ]"
+                    
+                    # Main station line with selection marker
+                    station_line = f"{mark} {summary}"
+                    if len(station_line) > width - 2:
+                        station_line = station_line[:width-5] + "..."
                     
                     # Highlight current position
                     attr = curses.A_REVERSE if idx == current_pos else curses.A_NORMAL
@@ -923,21 +1090,48 @@ class MarineDataConfigurator:
                         attr |= curses.color_pair(2)
                     
                     try:
+                        # Main station line
                         stdscr.addstr(y, 2, station_line, attr)
-                        # Distance and capabilities line
-                        caps = ', '.join(station.get('capabilities', ['Unknown']))
-                        detail_line = f"    📍 {distance} | 📊 {caps}"
-                        if len(detail_line) > width - 1:
-                            detail_line = detail_line[:width-4] + "..."
-                        stdscr.addstr(y + 1, 2, detail_line, curses.A_DIM)
+                        
+                        # Detail lines with proper formatting
+                        for detail_idx, detail_line in enumerate(detail_lines):
+                            detail_y = y + 1 + detail_idx
+                            if detail_y < height - 1:
+                                detail_attr = curses.A_DIM
+                                if '⚠️' in detail_line:
+                                    detail_attr = curses.color_pair(4)  # Red for warnings
+                                elif 'ℹ️' in detail_line:
+                                    detail_attr = curses.color_pair(3)  # Yellow for info
+                                
+                                if len(detail_line) > width - 6:
+                                    detail_line = detail_line[:width-9] + "..."
+                                stdscr.addstr(detail_y, 4, detail_line, detail_attr)
+                        
                     except curses.error:
                         pass
                 
-                # Selection summary
+                # Enhanced selection summary with CO-OPS capability overview
                 selected_count = len(marked)
-                summary = f"Selected: {selected_count}/{len(stations)} stations"
+                selected_stations = [stations[i] for i in marked]
+                
+                # Count CO-OPS specific capabilities in selection
+                total_water_level = sum(1 for i in marked 
+                                    if stations[i].get('capabilities', {}).get('water_level_observed', False) or
+                                        stations[i].get('capabilities', {}).get('water_level_predicted', False))
+                total_predictions = sum(1 for i in marked 
+                                    if stations[i].get('capabilities', {}).get('tide_predictions', False))
+                total_temp = sum(1 for i in marked 
+                            if stations[i].get('capabilities', {}).get('water_temperature', False))
+                
+                summary_lines = [
+                    f"Selected: {selected_count}/{len(stations)} stations",
+                    f"Water Level: {total_water_level} | Predictions: {total_predictions} | Temperature: {total_temp}"
+                ]
+                
                 try:
-                    stdscr.addstr(height-1, 0, summary, curses.color_pair(2) if selected_count > 0 else curses.A_DIM)
+                    for i, summary_line in enumerate(summary_lines):
+                        color = curses.color_pair(2) if selected_count > 0 else curses.A_DIM
+                        stdscr.addstr(height-2+i, 0, summary_line[:width-1], color)
                 except curses.error:
                     pass
                 
@@ -946,7 +1140,7 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
             
-            # Main selection loop
+            # Main selection loop (unchanged)
             while True:
                 draw_interface()
                 key = stdscr.getch()
@@ -968,7 +1162,7 @@ class MarineDataConfigurator:
         try:
             return curses.wrapper(curses_main)
         except:
-            return self._simple_text_selection(stations, title)
+            return self._simple_coops_text_selection(stations, title)
 
     def _simple_text_selection(self, stations, title):
         """Simple text-based selection fallback with explanations."""
@@ -1783,6 +1977,576 @@ class MarineDataConfigurator:
             organized[module] = ', '.join(organized[module])
         
         return organized
+
+    def _store_coops_station_capabilities_in_config(self, coops_stations_with_capabilities):
+        """
+        Store detected CO-OPS station capabilities in WeeWX configuration.
+        This method is ONLY for CO-OPS stations, NOT for NDBC buoy stations.
+        COMPLETELY DATA-DRIVEN from YAML capability structure.
+        
+        Args:
+            coops_stations_with_capabilities (list): CO-OPS stations with detected capabilities
+        """
+        service_config = self.config_dict.setdefault('MarineDataService', {})
+        station_configs = service_config.setdefault('station_configs', {})
+        
+        # Get capability mapping from YAML to know what to store
+        api_modules = self.yaml_data.get('api_modules', {})
+        coops_module = api_modules.get('coops_module', {})
+        product_capability_mapping = coops_module.get('product_capability_mapping', {})
+        
+        for coops_station in coops_stations_with_capabilities:
+            station_id = coops_station['id']
+            capabilities = coops_station.get('capabilities', {})
+            
+            # Store basic CO-OPS station info
+            station_config = {
+                'name': coops_station.get('name', ''),
+                'lat': coops_station.get('lat', 0),
+                'lon': coops_station.get('lon', 0),
+                'type': coops_station.get('type', 'coops'),
+                'station_type': capabilities.get('station_type', 'unknown'),
+                'supported_datums': capabilities.get('supported_datums', []),
+                'prediction_datums': capabilities.get('prediction_datums', []),
+                'available_products': capabilities.get('products', []),
+                'primary_datum': self._select_best_coops_datum(capabilities.get('supported_datums', []))
+            }
+            
+            # Store all capability flags dynamically from YAML mapping
+            for capability_name in product_capability_mapping.keys():
+                station_config[f"{capability_name}_support"] = capabilities.get(capability_name, False)
+            
+            station_configs[station_id] = station_config
+        
+        print(f"✅ Stored CO-OPS capabilities for {len(coops_stations_with_capabilities)} stations in configuration")
+
+    def _select_best_coops_datum(self, supported_datums):
+        """
+        Select the best datum from those supported by a CO-OPS station.
+        This method is ONLY for CO-OPS stations which use datums, NOT for NDBC buoy stations.
+        CONFIGURABLE via YAML datum preference order.
+        
+        Args:
+            supported_datums (list): List of datums supported by CO-OPS station
+            
+        Returns:
+            str: Best datum to use for this CO-OPS station
+        """
+        # Get datum preference from YAML
+        api_modules = self.yaml_data.get('api_modules', {})
+        coops_module = api_modules.get('coops_module', {})
+        datum_preference = coops_module.get('datum_preference_order', ['MLLW', 'NAVD88', 'MLW', 'MSL', 'MTL'])
+        default_datum = coops_module.get('default_datum', 'MLLW')
+        
+        for preferred in datum_preference:
+            if preferred in supported_datums:
+                return preferred
+        
+        # Fall back to first available datum or default
+        return supported_datums[0] if supported_datums else default_datum
+
+    def _filter_fields_by_station_capabilities(self, selected_stations):
+        """
+        Filter available fields based on what the selected stations actually support.
+        COMPLETELY DATA-DRIVEN from YAML field mappings and station capabilities.
+        
+        Args:
+            selected_stations (dict): Selected stations by type
+            
+        Returns:
+            dict: Available fields filtered by station capabilities
+        """
+        # Get station capabilities from stored configuration
+        service_config = self.config_dict.get('MarineDataService', {})
+        station_configs = service_config.get('station_configs', {})
+        
+        # Get field capability mapping from YAML
+        field_mappings = self.yaml_data.get('field_definitions', {})
+        
+        available_fields = {}
+        
+        # Check CO-OPS stations
+        coops_stations = selected_stations.get('coops_stations', [])
+        if coops_stations:
+            # Get capability mapping from YAML
+            api_modules = self.yaml_data.get('api_modules', {})
+            coops_module = api_modules.get('coops_module', {})
+            product_capability_mapping = coops_module.get('product_capability_mapping', {})
+            
+            # Initialize capability tracking
+            station_capabilities = {}
+            for capability in product_capability_mapping.keys():
+                station_capabilities[capability] = False
+            
+            # Check if ANY selected station supports each capability
+            for station_id in coops_stations:
+                station_config = station_configs.get(station_id, {})
+                for capability in product_capability_mapping.keys():
+                    support_key = f"{capability}_support"
+                    if station_config.get(support_key, False):
+                        station_capabilities[capability] = True
+            
+            # Build available CO-OPS fields based on capabilities and YAML field mappings
+            coops_fields = []
+            for module_name, module_fields in field_mappings.items():
+                if 'coops' in module_name.lower():
+                    for field_name, field_config in module_fields.items():
+                        # Check if this field's required capability is supported
+                        required_capability = field_config.get('required_capability')
+                        if required_capability and station_capabilities.get(required_capability, False):
+                            coops_fields.append(field_name)
+                        elif not required_capability:  # No capability requirement
+                            coops_fields.append(field_name)
+            
+            if coops_fields:
+                available_fields['coops_module'] = coops_fields
+        
+        # Check NDBC stations - assume all support basic meteorological data
+        ndbc_stations = selected_stations.get('ndbc_stations', [])
+        if ndbc_stations:
+            ndbc_fields = []
+            for module_name, module_fields in field_mappings.items():
+                if 'ndbc' in module_name.lower():
+                    ndbc_fields.extend(list(module_fields.keys()))
+            
+            if ndbc_fields:
+                available_fields['ndbc_module'] = ndbc_fields
+        
+        return available_fields
+
+    def _integrate_coops_capability_detection_into_discovery(self):
+        """
+        Integrate CO-OPS capability detection into the existing CO-OPS station discovery process.
+        This method is ONLY for CO-OPS stations, NOT for NDBC buoy stations.
+        This method should be called during CO-OPS station discovery to add capabilities.
+        """
+        # This would be integrated into the existing _discover_coops_stations method
+        # to add capability detection for each discovered CO-OPS station
+        pass
+
+    def _format_coops_station_capabilities_for_display(self, station_capabilities):
+        """
+        Format CO-OPS station capability dictionary for user-friendly display in GUI.
+        CO-OPS ONLY - not for NDBC stations.
+        
+        Args:
+            station_capabilities (dict): Capability dictionary from _detect_coops_station_capabilities()
+            
+        Returns:
+            str: Human-readable CO-OPS capability summary
+        """
+        if not station_capabilities or not isinstance(station_capabilities, dict):
+            return "Unknown capabilities"
+        
+        # Get display mappings from YAML
+        api_modules = self.yaml_data.get('api_modules', {})
+        coops_module = api_modules.get('coops_module', {})
+        display_capabilities = coops_module.get('display_capabilities', {
+            'water_level_observed': 'Real-time Water Level',
+            'water_level_predicted': 'Predicted Water Level', 
+            'tide_predictions': 'Tide Predictions',
+            'water_temperature': 'Water Temperature',
+            'air_temperature': 'Air Temperature',
+            'meteorological': 'Weather Data',
+            'currents': 'Current Data'
+        })
+        
+        # Build capability list from actual detected capabilities
+        cap_list = []
+        for cap_key, cap_display in display_capabilities.items():
+            if station_capabilities.get(cap_key, False):
+                cap_list.append(cap_display)
+        
+        # Add datum information if available
+        primary_datum = station_capabilities.get('primary_datum')
+        if primary_datum and primary_datum != 'MLLW':
+            cap_list.append(f"Datum: {primary_datum}")
+        
+        # Add station type information
+        station_type = station_capabilities.get('station_type', 'unknown')
+        if station_type in ['subordinate', 'reference']:
+            cap_list.append(f"Type: {station_type.title()}")
+        
+        return ', '.join(cap_list) if cap_list else "Limited capabilities"
+
+    def _get_detailed_coops_station_info_for_display(self, station):
+        """
+        Get detailed CO-OPS station information for GUI display with proper capability formatting.
+        CO-OPS ONLY - not for NDBC stations.
+        
+        Args:
+            station (dict): CO-OPS station information with capabilities
+            
+        Returns:
+            tuple: (summary_line, detail_lines)
+        """
+        station_id = station.get('id', 'Unknown')
+        name = station.get('name', 'Unknown Station')
+        distance_km = station.get('distance_km', 0)
+        bearing_text = station.get('bearing_text', 'Unknown direction')
+        
+        # Format capabilities using CO-OPS specific method
+        capabilities = station.get('capabilities', {})
+        cap_display = self._format_coops_station_capabilities_for_display(capabilities)
+        
+        # Build summary line
+        summary = f"{station_id} - {name}"
+        
+        # Build detail lines
+        location_line = f"📍 {distance_km:.1f}km {bearing_text}"
+        capability_line = f"📊 {cap_display}"
+        
+        # Add warnings for limited stations
+        warnings = []
+        if isinstance(capabilities, dict):
+            if not capabilities.get('water_level_observed', False) and not capabilities.get('water_level_predicted', False):
+                warnings.append("⚠️ No water level data")
+            if capabilities.get('station_type') == 'subordinate':
+                warnings.append("ℹ️ Subordinate station (limited data)")
+            if not capabilities.get('supported_datums'):
+                warnings.append("⚠️ No datum information")
+        
+        detail_lines = [location_line, capability_line]
+        if warnings:
+            detail_lines.append(' | '.join(warnings))
+        
+        return summary, detail_lines
+
+    def _format_ndbc_station_capabilities_for_display(self, station):
+        """
+        Format NDBC station capabilities for user-friendly display in GUI.
+        NDBC stations don't have datums or products API - capabilities based on file availability.
+        
+        Args:
+            station (dict): NDBC station information
+            
+        Returns:
+            str: Human-readable NDBC capability summary
+        """
+        # NDBC stations are file-based, so capabilities are inferred from station metadata
+        # Get display mappings from YAML
+        api_modules = self.yaml_data.get('api_modules', {})
+        ndbc_module = api_modules.get('ndbc_module', {})
+        
+        # NDBC capabilities are based on what files are typically available
+        ndbc_capabilities = ndbc_module.get('typical_capabilities', [
+            'Wave Height & Period',
+            'Marine Weather', 
+            'Sea Surface Temperature',
+            'Wind Speed & Direction',
+            'Barometric Pressure'
+        ])
+        
+        # Add station-specific information
+        station_type = station.get('station_type', 'buoy')
+        owner = station.get('owner', 'NOAA')
+        
+        cap_list = ndbc_capabilities.copy()
+        
+        # Add metadata information
+        if station_type and station_type != 'buoy':
+            cap_list.append(f"Type: {station_type.title()}")
+        
+        if owner and owner != 'NOAA':
+            cap_list.append(f"Owner: {owner}")
+        
+        # Add data availability note
+        cap_list.append("Real-time file updates")
+        
+        return ', '.join(cap_list) if cap_list else "Standard marine weather"
+
+    def _get_detailed_ndbc_station_info_for_display(self, station):
+        """
+        Get detailed NDBC station information for GUI display.
+        NDBC ONLY - different from CO-OPS (no capability detection, file-based).
+        
+        Args:
+            station (dict): NDBC station information
+            
+        Returns:
+            tuple: (summary_line, detail_lines)
+        """
+        station_id = station.get('id', 'Unknown')
+        name = station.get('name', 'Unknown Station')
+        distance_km = station.get('distance_km', 0)
+        bearing_text = station.get('bearing_text', 'Unknown direction')
+        
+        # Format NDBC capabilities
+        cap_display = self._format_ndbc_station_capabilities_for_display(station)
+        
+        # Build summary line
+        summary = f"{station_id} - {name}"
+        
+        # Build detail lines for NDBC
+        location_line = f"📍 {distance_km:.1f}km {bearing_text}"
+        capability_line = f"🌊 {cap_display}"
+        
+        # Add NDBC-specific information
+        info_notes = []
+        
+        # Station metadata
+        owner = station.get('owner', 'NOAA')
+        if owner != 'NOAA':
+            info_notes.append(f"Owner: {owner}")
+        
+        station_type = station.get('station_type', 'buoy')
+        if station_type != 'buoy':
+            info_notes.append(f"Type: {station_type.title()}")
+        
+        # Water depth if available
+        water_depth = station.get('water_depth')
+        if water_depth:
+            try:
+                depth_m = float(water_depth)
+                if depth_m > 0:
+                    info_notes.append(f"Depth: {depth_m:.0f}m")
+            except (ValueError, TypeError):
+                pass
+        
+        # Data update frequency
+        info_notes.append("Updates: Hourly")
+        
+        detail_lines = [location_line, capability_line]
+        if info_notes:
+            detail_lines.append('ℹ️ ' + ' | '.join(info_notes))
+        
+        return summary, detail_lines
+
+    def _curses_ndbc_station_selection(self, stations, title, icon):
+        """
+        Curses-based NDBC station selection interface.
+        NDBC ONLY - different from CO-OPS stations (no capability detection, file-based data).
+        
+        Args:
+            stations (list): List of NDBC station dictionaries
+            title (str): Title for the selection interface
+            icon (str): Icon to display in header
+            
+        Returns:
+            list: Selected NDBC stations
+        """
+        if not stations:
+            return []
+        
+        def curses_main(stdscr):
+            # Initialize curses settings
+            curses.curs_set(0)  # Hide cursor
+            curses.use_default_colors()
+            if curses.has_colors():
+                curses.start_color()
+                curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)   # Header
+                curses.init_pair(2, curses.COLOR_GREEN, -1)  # Selected
+                curses.init_pair(3, curses.COLOR_YELLOW, -1) # Highlighted
+                curses.init_pair(4, curses.COLOR_CYAN, -1)   # Info
+            
+            marked = set()  # Track selected stations
+            current_pos = 0  # Current cursor position
+            scroll_offset = 0  # For scrolling through long lists
+            
+            def draw_interface():
+                stdscr.clear()
+                height, width = stdscr.getmaxyx()
+                
+                # Header with NDBC-specific styling
+                header_text = f"{icon} {title}"
+                try:
+                    stdscr.addstr(0, (width - len(header_text)) // 2, header_text, 
+                                curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.addstr(1, (width - len(header_text)) // 2, "=" * len(header_text))
+                except curses.error:
+                    pass
+                
+                # NDBC-specific explanation
+                explanation = [
+                    "Select NDBC marine buoy stations for offshore data collection.",
+                    "🌊 NDBC buoys provide: Wave data, marine weather, sea surface temperature",
+                    "📊 All NDBC stations provide similar data types (no capability detection needed)",
+                    "🏝️  Offshore locations: Better wave data, less sheltered than coastal stations",
+                    "⏱️  Update frequency: Hourly data updates via file downloads",
+                    "🎯 TIP: Choose 2-3 stations at different distances for comprehensive coverage."
+                ]
+                
+                # Explanation section
+                exp_start = 3
+                for i, line in enumerate(explanation):
+                    if exp_start + i < height - 12:
+                        try:
+                            color = curses.A_DIM
+                            if line.startswith('🌊') or line.startswith('📊'):
+                                color = curses.color_pair(4)  # Cyan for NDBC info
+                            elif line.startswith('🎯'):
+                                color = curses.color_pair(2)  # Green for tips
+                            stdscr.addstr(exp_start + i, 0, line[:width-1], color)
+                        except curses.error:
+                            pass
+                
+                # Instructions
+                inst_row = exp_start + len(explanation) + 1
+                try:
+                    stdscr.addstr(inst_row, 0, "SPACE: Toggle  |  ENTER: Confirm  |  ESC: Skip  |  ↑/↓: Navigate  |  q: Quit"[:width-1])
+                    stdscr.addstr(inst_row + 1, 0, "-" * min(70, width-1))
+                except curses.error:
+                    pass
+                
+                # Station list - NDBC-specific display (3 lines per station)
+                start_row = inst_row + 3
+                available_rows = max(1, (height - start_row - 3) // 3)  # 3 lines per NDBC station
+                max_display = min(10, available_rows)
+                display_stations = stations[:max_display] if stations else []
+                
+                for idx, station in enumerate(display_stations):
+                    y = start_row + (idx * 3)  # 3 lines per station
+                    if y >= height - 3:
+                        break
+                    
+                    # Get formatted NDBC station information
+                    summary, detail_lines = self._get_detailed_ndbc_station_info_for_display(station)
+                    
+                    # Selection marker
+                    mark = "[X]" if idx in marked else "[ ]"
+                    
+                    # Main station line with selection marker
+                    station_line = f"{mark} {summary}"
+                    if len(station_line) > width - 2:
+                        station_line = station_line[:width-5] + "..."
+                    
+                    # Highlight current position
+                    attr = curses.A_REVERSE if idx == current_pos else curses.A_NORMAL
+                    if idx in marked:
+                        attr |= curses.color_pair(2)
+                    
+                    try:
+                        # Main station line
+                        stdscr.addstr(y, 2, station_line, attr)
+                        
+                        # Detail lines with NDBC-appropriate formatting
+                        for detail_idx, detail_line in enumerate(detail_lines):
+                            detail_y = y + 1 + detail_idx
+                            if detail_y < height - 1:
+                                detail_attr = curses.A_DIM
+                                if 'ℹ️' in detail_line:
+                                    detail_attr = curses.color_pair(4)  # Cyan for NDBC info
+                                
+                                if len(detail_line) > width - 6:
+                                    detail_line = detail_line[:width-9] + "..."
+                                stdscr.addstr(detail_y, 4, detail_line, detail_attr)
+                        
+                    except curses.error:
+                        pass
+                
+                # NDBC selection summary
+                selected_count = len(marked)
+                
+                # NDBC stations all provide similar capabilities, so show distance spread
+                if marked:
+                    selected_distances = [stations[i].get('distance_km', 0) for i in marked]
+                    min_distance = min(selected_distances)
+                    max_distance = max(selected_distances)
+                    distance_spread = f"{min_distance:.1f}km - {max_distance:.1f}km"
+                else:
+                    distance_spread = "None selected"
+                
+                summary_lines = [
+                    f"Selected: {selected_count}/{len(stations)} NDBC buoy stations",
+                    f"Coverage range: {distance_spread}"
+                ]
+                
+                try:
+                    for i, summary_line in enumerate(summary_lines):
+                        color = curses.color_pair(2) if selected_count > 0 else curses.A_DIM
+                        stdscr.addstr(height-2+i, 0, summary_line[:width-1], color)
+                except curses.error:
+                    pass
+                
+                try:
+                    stdscr.refresh()
+                except curses.error:
+                    pass
+            
+            # Main selection loop
+            while True:
+                draw_interface()
+                key = stdscr.getch()
+                
+                if key == ord('q') or key == 27:  # ESC or 'q' to quit
+                    return []
+                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # ENTER to confirm
+                    return [stations[i] for i in marked]
+                elif key == ord(' '):  # SPACE to toggle selection
+                    if current_pos in marked:
+                        marked.remove(current_pos)
+                    else:
+                        marked.add(current_pos)
+                elif key == curses.KEY_UP:
+                    current_pos = max(0, current_pos - 1)
+                elif key == curses.KEY_DOWN:
+                    current_pos = min(len(stations) - 1, current_pos + 1)
+        
+        try:
+            return curses.wrapper(curses_main)
+        except:
+            return self._simple_ndbc_text_selection(stations, title)
+
+    def _simple_ndbc_text_selection(self, stations, title):
+        """
+        Simple text-based NDBC station selection fallback.
+        NDBC ONLY - fallback when curses interface fails.
+        
+        Args:
+            stations (list): List of NDBC station dictionaries  
+            title (str): Title for selection
+            
+        Returns:
+            list: Selected NDBC stations
+        """
+        if not stations:
+            print("No NDBC stations available for selection.")
+            return []
+        
+        print(f"\n{title}")
+        print("=" * len(title))
+        print("NDBC buoy stations provide wave data and marine weather.")
+        print("All stations offer similar capabilities.\n")
+        
+        # Display stations with numbers
+        for idx, station in enumerate(stations):
+            summary, detail_lines = self._get_detailed_ndbc_station_info_for_display(station)
+            print(f"{idx + 1:2d}. {summary}")
+            for detail in detail_lines:
+                print(f"    {detail}")
+            print()
+        
+        # Get user selection
+        while True:
+            try:
+                selection = input(f"Select stations (1-{len(stations)}, comma-separated) or ENTER for auto-select: ").strip()
+                
+                if not selection:
+                    # Auto-select closest 2 stations
+                    auto_selected = stations[:2]
+                    print(f"Auto-selected {len(auto_selected)} closest NDBC stations")
+                    return auto_selected
+                
+                # Parse user input
+                indices = []
+                for part in selection.split(','):
+                    part = part.strip()
+                    if part.isdigit():
+                        idx = int(part) - 1
+                        if 0 <= idx < len(stations):
+                            indices.append(idx)
+                
+                if indices:
+                    selected = [stations[i] for i in indices]
+                    print(f"Selected {len(selected)} NDBC stations")
+                    return selected
+                else:
+                    print("Invalid selection. Please try again.")
+                    
+            except (KeyboardInterrupt, EOFError):
+                print("\nSelection cancelled.")
+                return []
+
 
 class MarineDatabaseManager:
     """
