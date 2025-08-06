@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Felis Cattus
+# Secret Animal: Horse
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -1290,8 +1290,7 @@ class COOPSBackgroundThread(threading.Thread):
             log_errors = str(self.config.get('log_errors', 'true')).lower() in ('true', 'yes', '1')
             if log_errors:
                 log.error(f"Unexpected error collecting CO-OPS data from {station_id}: {e}")
-    
-    
+      
     def shutdown(self):
         """
         Shutdown the CO-OPS background thread gracefully.
