@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Donkey
+# Secret Animal: Mule
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -482,8 +482,9 @@ class COOPSAPIClient:
             return "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
         
         service_config = self.config_dict.get('MarineDataService', {})
-        coops_config = service_config.get('coops_module', {})
-        api_url = coops_config.get('api_url')
+        api_endpoints = service_config.get('api_endpoints', {})  
+        coops_config = api_endpoints.get('coops_module', {})     
+        api_url = coops_config.get('base_url')                   
         
         if api_url:
             return api_url
@@ -812,8 +813,9 @@ class NDBCAPIClient:
             return "https://www.ndbc.noaa.gov/data/realtime2"
         
         service_config = self.config_dict.get('MarineDataService', {})
-        ndbc_config = service_config.get('ndbc_module', {})
-        api_url = ndbc_config.get('api_url')
+        api_endpoints = service_config.get('api_endpoints', {})  
+        ndbc_config = api_endpoints.get('ndbc_module', {})       
+        api_url = ndbc_config.get('base_url')                    
         
         if api_url:
             return api_url
