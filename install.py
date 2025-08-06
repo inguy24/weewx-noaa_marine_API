@@ -657,6 +657,12 @@ class MarineDataConfigurator:
                     ortho_datum = datums_data.get(ortho_datum_field)
                     if ortho_datum and ortho_datum not in capabilities['supported_datums']:
                         capabilities['supported_datums'].append(ortho_datum)
+
+                    # Select primary datum from supported datums
+                    if capabilities['supported_datums']:
+                        capabilities['primary_datum'] = self._select_best_coops_datum(capabilities['supported_datums'])
+                    else:
+                        capabilities['primary_datum'] = coops_module.get('default_datum', 'MLLW')
             
             # For tide predictions, check if prediction datums are different
             tide_prediction_capability = coops_module.get('tide_prediction_capability_name', 'tide_predictions')
@@ -664,7 +670,7 @@ class MarineDataConfigurator:
                 # Some stations may have different datums for predictions vs observations
                 prediction_datums = coops_module.get('prediction_datums', capabilities['supported_datums'])
                 capabilities['prediction_datums'] = prediction_datums
-            
+
             print(f"    📊 Station {station_id} capabilities: {capabilities}")
             return capabilities
             
