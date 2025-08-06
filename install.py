@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Maltese Falcon
+# Magic Animal: Elephant
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -969,7 +969,7 @@ class MarineDataConfigurator:
             if coops_stations:
                 print("\n📍 Opening CO-OPS station selection interface...")
                 input("Press ENTER to continue...")
-                coops_selected = self._curses_station_selection(coops_stations, "CO-OPS Tide Stations", "🌊")
+                coops_selected = self._curses_coops_station_selection(coops_stations, "CO-OPS Tide Stations", "🌊")
                 selected_stations.extend(coops_selected)
                 if coops_selected:
                     print(f"✅ Selected {len(coops_selected)} CO-OPS stations")
@@ -980,7 +980,7 @@ class MarineDataConfigurator:
             if ndbc_stations:
                 print("\n📍 Opening NDBC buoy selection interface...")
                 input("Press ENTER to continue...")
-                ndbc_selected = self._curses_station_selection(ndbc_stations, "NDBC Buoy Stations", "🛟")
+                ndbc_selected = self._curses_ndbc_station_selection(ndbc_stations, "NDBC Buoy Stations", "🛟")
                 selected_stations.extend(ndbc_selected)
                 if ndbc_selected:
                     print(f"✅ Selected {len(ndbc_selected)} NDBC stations")
