@@ -288,9 +288,22 @@ fields:
     api_product: "stdmet"
     description: "Mean wave period"
     
+  mean_wave_direction:
+    display_name: "Mean wave direction"
+    database_field: "marine_wave_direction"
+    database_type: "REAL"
+    database_table: "ndbc_data"
+    api_path: "MWD"
+    service_field: "mean_wave_direction"
+    complexity_levels: ["minimal", "all"]
+    unit_group: "group_direction"
+    api_module: "ndbc_module"
+    api_product: "stdmet"
+    description: "Mean wave direction (degrees true)"
+    
   marine_wind_direction:
     display_name: "Marine wind direction"
-    database_field: "marine_wave_direction"  # Note: fixed field name to match error
+    database_field: "marine_wind_direction"  # Note: fixed field name to match error
     database_type: "REAL"
     database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WDIR"
