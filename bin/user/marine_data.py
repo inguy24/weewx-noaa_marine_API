@@ -184,7 +184,7 @@ class MarineDatabaseManager:
         VALUES ({', '.join(placeholders)})
         """
         
-        self.database_manager.getSql().execute(sql, values)
+        self.database_manager.getSql(sql, values)
         log.debug(f"Inserted data into {table_name} for station {station_id}")
     
     def get_latest_marine_data(self, station_id):
@@ -200,7 +200,7 @@ class MarineDatabaseManager:
             for table in tables:
                 try:
                     sql = f"SELECT * FROM {table} WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
-                    result = self.database_manager.getSql().execute(sql, (station_id,)).fetchone()
+                    result = self.database_manager.getSql(sql, (station_id,)).fetchone()
                     if result:
                         latest_data[table] = dict(result)
                 except Exception:
@@ -307,7 +307,7 @@ class MarineDataSearchList:
                 # Get realtime data
                 try:
                     sql = "SELECT * FROM coops_realtime WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
-                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    result = self.db_manager.database_manager.getSql(sql, (sid,)).fetchone()
                     if result:
                         station_data['realtime'] = dict(result)
                 except Exception:
@@ -316,7 +316,7 @@ class MarineDataSearchList:
                 # Get predictions data
                 try:
                     sql = "SELECT * FROM coops_predictions WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
-                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    result = self.db_manager.database_manager.getSql(sql, (sid,)).fetchone()
                     if result:
                         station_data['predictions'] = dict(result)
                 except Exception:
@@ -351,7 +351,7 @@ class MarineDataSearchList:
             for sid in stations_to_query:
                 try:
                     sql = "SELECT * FROM ndbc_data WHERE station_id = ? ORDER BY dateTime DESC LIMIT 1"
-                    result = self.db_manager.database_manager.getSql().execute(sql, (sid,)).fetchone()
+                    result = self.db_manager.database_manager.getSql(sql, (sid,)).fetchone()
                     if result:
                         ndbc_data[sid] = dict(result)
                 except Exception:
