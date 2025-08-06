@@ -1007,7 +1007,7 @@ class MarineDataConfigurator:
             return self._simple_station_selection(coops_stations, ndbc_stations)
 
     def _curses_coops_station_selection(self, stations, title, icon):
-        """Updated curses CO-OPS station selection with proper capability display.
+        """Updated curses CO-OPS station selection with proper capability display and scrolling.
         CO-OPS ONLY - not for NDBC stations."""
         
         if not stations:
@@ -1027,8 +1027,10 @@ class MarineDataConfigurator:
             marked = set()  # Track selected stations
             current_pos = 0  # Current cursor position
             scroll_offset = 0  # For scrolling through long lists
+            max_display = 8  # Default value, will be updated in draw_interface
             
             def draw_interface():
+                nonlocal max_display  # Allow updating the outer variable
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
@@ -1073,14 +1075,21 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
                 
-                # Station list - Enhanced display with capability details
+                # Station list - Enhanced display with capability details and proper scrolling
                 start_row = inst_row + 3
                 available_rows = max(1, (height - start_row - 3) // 4)  # 4 lines per station now
                 max_display = min(10, available_rows)
-                display_stations = stations[:max_display] if stations else []
                 
-                for idx, station in enumerate(display_stations):
-                    y = start_row + (idx * 4)  # 4 lines per station
+                # Calculate which stations to display based on scroll position
+                display_start = scroll_offset
+                display_end = min(len(stations), display_start + max_display)
+                display_stations = stations[display_start:display_end] if stations else []
+                
+                # Display stations with proper scrolling
+                for display_idx, station in enumerate(display_stations):
+                    actual_idx = display_start + display_idx  # Real index in full stations list
+                    y = start_row + (display_idx * 4)  # Y position based on display index
+                    
                     if y >= height - 4:
                         break
                     
@@ -1088,7 +1097,7 @@ class MarineDataConfigurator:
                     summary, detail_lines = self._get_detailed_coops_station_info_for_display(station)
                     
                     # Selection marker
-                    mark = "[X]" if idx in marked else "[ ]"
+                    mark = "[X]" if actual_idx in marked else "[ ]"
                     
                     # Main station line with selection marker
                     station_line = f"{mark} {summary}"
@@ -1096,8 +1105,8 @@ class MarineDataConfigurator:
                         station_line = station_line[:width-5] + "..."
                     
                     # Highlight current position
-                    attr = curses.A_REVERSE if idx == current_pos else curses.A_NORMAL
-                    if idx in marked:
+                    attr = curses.A_REVERSE if actual_idx == current_pos else curses.A_NORMAL
+                    if actual_idx in marked:
                         attr |= curses.color_pair(2)
                     
                     try:
@@ -1121,14 +1130,21 @@ class MarineDataConfigurator:
                     except curses.error:
                         pass
                 
+                # Show scrolling indicator if there are more stations
+                if len(stations) > max_display:
+                    scroll_info = f"Showing {display_start + 1}-{display_end} of {len(stations)} stations"
+                    try:
+                        stdscr.addstr(start_row - 1, width - len(scroll_info) - 2, scroll_info, curses.A_DIM)
+                    except curses.error:
+                        pass
+                
                 # Enhanced selection summary with CO-OPS capability overview
                 selected_count = len(marked)
-                selected_stations = [stations[i] for i in marked]
                 
                 # Count CO-OPS specific capabilities in selection
                 total_water_level = sum(1 for i in marked 
                                     if stations[i].get('capabilities', {}).get('water_level_observed', False) or
-                                        stations[i].get('capabilities', {}).get('water_level_predicted', False))
+                                    stations[i].get('capabilities', {}).get('water_level_predicted', False))
                 total_predictions = sum(1 for i in marked 
                                     if stations[i].get('capabilities', {}).get('tide_predictions', False))
                 total_temp = sum(1 for i in marked 
@@ -1151,7 +1167,7 @@ class MarineDataConfigurator:
                 except curses.error:
                     pass
             
-            # Main selection loop (unchanged)
+            # Main selection loop with proper scrolling
             while True:
                 draw_interface()
                 key = stdscr.getch()
@@ -1166,9 +1182,17 @@ class MarineDataConfigurator:
                     else:
                         marked.add(current_pos)
                 elif key == curses.KEY_UP:
-                    current_pos = max(0, current_pos - 1)
+                    if current_pos > 0:
+                        current_pos -= 1
+                        # Auto-scroll up if needed
+                        if current_pos < scroll_offset:
+                            scroll_offset = current_pos
                 elif key == curses.KEY_DOWN:
-                    current_pos = min(len(stations) - 1, current_pos + 1)
+                    if current_pos < len(stations) - 1:
+                        current_pos += 1
+                        # Auto-scroll down if needed
+                        if current_pos >= scroll_offset + max_display:
+                            scroll_offset = current_pos - max_display + 1
         
         try:
             return curses.wrapper(curses_main)
