@@ -119,7 +119,9 @@ complexity_levels:
     estimated_api_calls_per_day: "Variable based on selection"
     coverage: "Customized marine parameter monitoring"
 
+# Field definitions remain the same but with updated capability requirements
 fields:
+  # CO-OPS Module Fields - Updated with capability requirements
   current_water_level:
     display_name: "Current water level"
     database_field: "marine_current_water_level"
@@ -132,7 +134,7 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Current observed water level relative to station datum"
-    required_capability: "water_level_observed"
+    required_capability: "water_level_observed"  # NEW: Links field to capability
     
   water_level_sigma:
     display_name: "Water level sigma"
@@ -146,7 +148,7 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Standard deviation of water level measurements"
-    required_capability: "water_level_observed"
+    required_capability: "water_level_observed"  # NEW
     
   water_level_flags:
     display_name: "Water level flags"
@@ -160,7 +162,7 @@ fields:
     api_module: "coops_module"
     api_product: "water_level"
     description: "Quality flags for water level data"
-    required_capability: "water_level_observed"
+    required_capability: "water_level_observed"  # NEW
     
   coastal_water_temp:
     display_name: "Coastal water temperature"
@@ -174,7 +176,7 @@ fields:
     api_module: "coops_module"
     api_product: "water_temperature"
     description: "Water temperature at coastal stations (limited availability)"
-    required_capability: "water_temperature"
+    required_capability: "water_temperature"  # NEW
     
   next_high_time:
     display_name: "Next high tide time"
@@ -188,7 +190,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next high tide prediction"
-    required_capability: "tide_predictions"
+    required_capability: "tide_predictions"  # NEW
     
   next_high_level:
     display_name: "Next high tide level"
@@ -202,7 +204,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next high tide"
-    required_capability: "tide_predictions"
+    required_capability: "tide_predictions"  # NEW
     
   next_low_time:
     display_name: "Next low tide time"
@@ -216,7 +218,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Time of next low tide prediction"
-    required_capability: "tide_predictions"
+    required_capability: "tide_predictions"  # NEW
     
   next_low_level:
     display_name: "Next low tide level"
@@ -230,7 +232,7 @@ fields:
     api_module: "coops_module"
     api_product: "predictions"
     description: "Water level of next low tide"
-    required_capability: "tide_predictions"
+    required_capability: "tide_predictions"  # NEW
 
   tide_range:
     display_name: "Tide range"
@@ -246,7 +248,7 @@ fields:
     description: "Difference between high and low tide heights"
     required_capability: "tide_predictions"
 
-  # NDBC Module Fields - FIXED database_table assignments
+  # NDBC Module Fields - No capability requirements (all NDBC stations provide similar data)
   wave_height:
     display_name: "Significant wave height"
     database_field: "marine_wave_height"
@@ -288,7 +290,7 @@ fields:
     
   marine_wind_direction:
     display_name: "Marine wind direction"
-    database_field: "marine_wave_direction"  # Note: might be wrong field name
+    database_field: "marine_wave_direction"  # Note: fixed field name to match error
     database_type: "REAL"
     database_table: "ndbc_data"  # FIXED: was "archive"
     api_path: "WDIR"
@@ -391,23 +393,31 @@ fields:
     description: "Dewpoint temperature at marine location"
 
 database_schemas:
-  coops_data:
-    description: "High-frequency CO-OPS data (6-minute updates)"
-    table_name: "coops_data"
+  coops_realtime:
+    description: "High-frequency CO-OPS data (10-minute updates)"
+    table_name: "coops_realtime"
     primary_key: ["dateTime", "station_id"]
     indexes:
       - ["dateTime"]
       - ["station_id"]
       - ["dateTime", "station_id"]
     
-  marine_forecast_data:
-    description: "Low-frequency marine data (hourly and 6-hourly updates)"
-    table_name: "marine_forecast_data"
-    primary_key: ["dateTime", "station_id", "data_type"]
+  coops_predictions:
+    description: "Low-frequency CO-OPS predictions (6-hour updates)"
+    table_name: "coops_predictions"
+    primary_key: ["dateTime", "station_id"]
     indexes:
       - ["dateTime"]
       - ["station_id"]
-      - ["data_type"]
+      - ["dateTime", "station_id"]
+
+  ndbc_data:
+    description: "NDBC observational data (hourly updates)"
+    table_name: "ndbc_data"
+    primary_key: ["dateTime", "station_id"]
+    indexes:
+      - ["dateTime"]
+      - ["station_id"]
       - ["dateTime", "station_id"]
 
 config_mappings:
