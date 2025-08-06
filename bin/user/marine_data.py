@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Horse
+# Secret Animal: Donkey
 """
 WeeWX Marine Data Extension - Core Service Framework
 
@@ -141,6 +141,11 @@ class MarineDatabaseManager:
             table_data = {}
             
             for db_field, value in data_record.items():
+                # CRITICAL FIX: Skip common API fields that aren't mapped
+                if db_field in ['timestamp', 'time', 'date', 'datetime']:
+                    log.debug(f"Skipping unmapped API field: {db_field}")
+                    continue
+                    
                 target_table = self.determine_target_table(db_field)
                 if target_table:
                     if target_table not in table_data:
@@ -178,11 +183,37 @@ class MarineDatabaseManager:
         placeholders = ['?' for _ in fields]
         values = [field_data[field] for field in fields]
         
-        sql = f"""
-        INSERT OR REPLACE INTO {table_name} 
-        ({', '.join(fields)})
-        VALUES ({', '.join(placeholders)})
-        """
+        # CRITICAL FIX: Database-specific SQL syntax for MySQL/MariaDB compatibility
+        try:
+            # Detect database type from connection
+            connection_type = str(type(self.database_manager.connection)).lower()
+            
+            if 'mysql' in connection_type or 'mariadb' in connection_type:
+                # MySQL/MariaDB syntax with %s placeholders
+                placeholders = ['%s' for _ in fields]
+                sql = f"""
+                INSERT INTO {table_name} 
+                ({', '.join(fields)})
+                VALUES ({', '.join(placeholders)})
+                ON DUPLICATE KEY UPDATE
+                {', '.join([f"{field} = VALUES({field})" for field in fields if field not in ['dateTime', 'station_id']])}
+                """
+            else:
+                # SQLite syntax (keep original)
+                sql = f"""
+                INSERT OR REPLACE INTO {table_name} 
+                ({', '.join(fields)})
+                VALUES ({', '.join(placeholders)})
+                """
+                
+        except Exception as e:
+            log.error(f"Database detection failed, using SQLite syntax: {e}")
+            # Fall back to SQLite syntax
+            sql = f"""
+            INSERT OR REPLACE INTO {table_name} 
+            ({', '.join(fields)})
+            VALUES ({', '.join(placeholders)})
+            """
         
         self.database_manager.getSql(sql, values)
         log.debug(f"Inserted data into {table_name} for station {station_id}")
