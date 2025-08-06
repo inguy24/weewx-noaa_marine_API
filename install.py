@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Bengal Tiger
+# Magic Animal: Black Mamba
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -2213,7 +2213,11 @@ class MarineDataConfigurator:
                 warnings.append("⚠️ No water level data")
             if capabilities.get('station_type') == 'subordinate':
                 warnings.append("ℹ️ Subordinate station (limited data)")
-            if not capabilities.get('supported_datums'):
+            
+            # Check for datum information more precisely
+            supported_datums = capabilities.get('supported_datums', [])
+            primary_datum = capabilities.get('primary_datum')
+            if not supported_datums or not primary_datum:
                 warnings.append("⚠️ No datum information")
         
         detail_lines = [location_line, capability_line]
