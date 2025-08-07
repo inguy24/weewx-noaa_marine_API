@@ -37,7 +37,15 @@ from weeutil.weeutil import to_bool
 
 log = weeutil.logger.logging.getLogger(__name__)
 
-VERSION = "2.0.0"
+VERSION = "1.0.0a"
+
+# CONSISTENT ICONS: Match install.py for consistency
+CORE_ICONS = {
+    'navigation': '📍',    # Location/station selection
+    'status': '✅',        # Success indicators  
+    'warning': '⚠️',       # Warnings/issues
+    'selection': '🔧'      # Configuration/selection
+}
 
 class MarineDataAPIError(Exception):
     """Custom exception for marine data API errors"""
@@ -315,20 +323,20 @@ class MarineDataTester:
                     import configobj
                     self.config_dict = configobj.ConfigObj(config_path)
                     self.service_config = self.config_dict.get('MarineDataService', {})
-                    print(f"✅ Loaded WeeWX configuration: {config_path}")
+                    print(f"{CORE_ICONS['status']} Loaded WeeWX configuration: {config_path}")
                     return
                 except Exception as e:
                     continue
         
-        print("❌ No WeeWX configuration found")
+        print(f"{CORE_ICONS['warning']} No WeeWX configuration found")
 
     def test_installation(self):
         """Test basic installation components"""
-        print("\n🔧 TESTING INSTALLATION")
+        print(f"\n{CORE_ICONS['selection']} TESTING INSTALLATION")
         print("-" * 40)
         
         if not self.config_dict:
-            print("❌ No WeeWX configuration available")
+            print(f"{CORE_ICONS['warning']} No WeeWX configuration available")
             return False
         
         success = True
@@ -340,33 +348,33 @@ class MarineDataTester:
         data_services = services_config.get('data_services', '')
         
         if 'user.marine_data.MarineDataService' in str(data_services):
-            print("  ✅ Service registered in WeeWX configuration")
+            print(f"  {CORE_ICONS['status']} Service registered in WeeWX configuration")
         else:
-            print("  ❌ Service not registered in data_services")
+            print(f"  {CORE_ICONS['warning']} Service not registered in data_services")
             success = False
         
         # Check service configuration
         print("Checking service configuration...")
         if self.service_config:
-            print("  ✅ MarineDataService section found")
+            print(f"  {CORE_ICONS['status']} MarineDataService section found")
             
             # Check selected stations
             selected_stations = self.service_config.get('selected_stations', {})
             if selected_stations:
-                print(f"  ✅ Station configuration found: {len(selected_stations)} modules")
+                print(f"  {CORE_ICONS['status']} Station configuration found: {len(selected_stations)} modules")
             else:
-                print("  ❌ No station configuration found")
+                print(f"  {CORE_ICONS['warning']} No station configuration found")
                 success = False
             
             # Check field mappings
             field_mappings = self.service_config.get('field_mappings', {})
             if field_mappings:
-                print(f"  ✅ Field mappings found: {len(field_mappings)} modules")
+                print(f"  {CORE_ICONS['status']} Field mappings found: {len(field_mappings)} modules")
             else:
-                print("  ❌ No field mappings found")
+                print(f"  {CORE_ICONS['warning']} No field mappings found")
                 success = False
         else:
-            print("  ❌ No MarineDataService configuration found")
+            print(f"  {CORE_ICONS['warning']} No MarineDataService configuration found")
             success = False
         
         # Check database tables
@@ -377,19 +385,19 @@ class MarineDataTester:
             
             for table in marine_tables:
                 if table in db_tables:
-                    print(f"  ✅ Table {table} exists")
+                    print(f"  {CORE_ICONS['status']} Table {table} exists")
                 else:
-                    print(f"  ❌ Table {table} missing")
+                    print(f"  {CORE_ICONS['warning']} Table {table} missing")
                     success = False
         except Exception as e:
-            print(f"  ❌ Error checking database tables: {e}")
+            print(f"  {CORE_ICONS['warning']} Error checking database tables: {e}")
             success = False
         
         return success
 
     def test_api_connectivity(self):
         """Test API connectivity"""
-        print("\n🌐 TESTING API CONNECTIVITY")
+        print(f"\n{CORE_ICONS['navigation']} TESTING API CONNECTIVITY")
         print("-" * 40)
         
         success = True
@@ -401,13 +409,13 @@ class MarineDataTester:
             test_data = coops_client.get_water_level('9414290')  # La Jolla test station
             
             if test_data and 'data' in test_data:
-                print("  ✅ CO-OPS API working")
+                print(f"  {CORE_ICONS['status']} CO-OPS API working")
             else:
-                print("  ❌ CO-OPS API: No data received")
+                print(f"  {CORE_ICONS['warning']} CO-OPS API: No data received")
                 success = False
                 
         except Exception as e:
-            print(f"  ❌ CO-OPS API error: {e}")
+            print(f"  {CORE_ICONS['warning']} CO-OPS API error: {e}")
             success = False
         
         # Test NDBC API
@@ -417,24 +425,24 @@ class MarineDataTester:
             test_data = ndbc_client.get_station_data('46042')  # Monterey test station
             
             if test_data and len(test_data) > 0:
-                print("  ✅ NDBC API working")
+                print(f"  {CORE_ICONS['status']} NDBC API working")
             else:
-                print("  ❌ NDBC API: No data received")
+                print(f"  {CORE_ICONS['warning']} NDBC API: No data received")
                 success = False
                 
         except Exception as e:
-            print(f"  ❌ NDBC API error: {e}")
+            print(f"  {CORE_ICONS['warning']} NDBC API error: {e}")
             success = False
         
         return success
 
     def test_database_operations(self):
         """Test database operations"""
-        print("\n💾 TESTING DATABASE OPERATIONS")
+        print(f"\n{CORE_ICONS['selection']} TESTING DATABASE OPERATIONS")
         print("-" * 40)
         
         if not self.config_dict:
-            print("❌ No WeeWX configuration available")
+            print(f"{CORE_ICONS['warning']} No WeeWX configuration available")
             return False
         
         success = True
@@ -442,7 +450,7 @@ class MarineDataTester:
         try:
             # Test WeeWX database manager
             with weewx.manager.open_manager_with_config(self.config_dict, 'wx_binding') as manager:
-                print("  ✅ WeeWX database manager connection successful")
+                print(f"  {CORE_ICONS['status']} WeeWX database manager connection successful")
                 
                 # Test data insertion
                 test_time = int(time.time())
@@ -454,7 +462,7 @@ class MarineDataTester:
                     VALUES (?, ?, ?)
                 """
                 manager.connection.execute(coops_sql, (test_time, 'TEST_STATION', 2.5))
-                print("  ✅ CO-OPS realtime table insertion test passed")
+                print(f"  {CORE_ICONS['status']} CO-OPS realtime table insertion test passed")
                 
                 # Test tide_table insertion
                 tide_sql = """
@@ -463,7 +471,7 @@ class MarineDataTester:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """
                 manager.connection.execute(tide_sql, (test_time, 'TEST_STATION', test_time + 3600, 'H', 6.2, 'MLLW', 0))
-                print("  ✅ Tide table insertion test passed")
+                print(f"  {CORE_ICONS['status']} Tide table insertion test passed")
                 
                 # Test ndbc_data insertion
                 ndbc_sql = """
@@ -472,23 +480,23 @@ class MarineDataTester:
                     VALUES (?, ?, ?)
                 """
                 manager.connection.execute(ndbc_sql, (test_time, 'TEST_STATION', 3.2))
-                print("  ✅ NDBC data table insertion test passed")
+                print(f"  {CORE_ICONS['status']} NDBC data table insertion test passed")
                 
                 # Clean up test data
                 cleanup_sql = "DELETE FROM {} WHERE station_id = 'TEST_STATION'"
                 for table in ['coops_realtime', 'tide_table', 'ndbc_data']:
                     manager.connection.execute(cleanup_sql.format(table))
-                print("  ✅ Test data cleanup completed")
+                print(f"  {CORE_ICONS['status']} Test data cleanup completed")
                 
         except Exception as e:
-            print(f"  ❌ Database operation error: {e}")
+            print(f"  {CORE_ICONS['warning']} Database operation error: {e}")
             success = False
         
         return success
 
     def run_all_tests(self):
         """Run complete test suite"""
-        print(f"\n🧪 MARINE DATA EXTENSION TESTING")
+        print(f"\n{CORE_ICONS['selection']} MARINE DATA EXTENSION TESTING")
         print("=" * 60)
         
         tests_passed = 0
@@ -498,34 +506,34 @@ class MarineDataTester:
         total_tests += 1
         if self.test_installation():
             tests_passed += 1
-            print("\nInstallation Test: ✅ PASSED")
+            print(f"\nInstallation Test: {CORE_ICONS['status']} PASSED")
         else:
-            print("\nInstallation Test: ❌ FAILED")
+            print(f"\nInstallation Test: {CORE_ICONS['warning']} FAILED")
         
         # Test API connectivity
         total_tests += 1
         if self.test_api_connectivity():
             tests_passed += 1
-            print("\nAPI Connectivity Test: ✅ PASSED")
+            print(f"\nAPI Connectivity Test: {CORE_ICONS['status']} PASSED")
         else:
-            print("\nAPI Connectivity Test: ❌ FAILED")
+            print(f"\nAPI Connectivity Test: {CORE_ICONS['warning']} FAILED")
         
         # Test database operations
         total_tests += 1
         if self.test_database_operations():
             tests_passed += 1
-            print("\nDatabase Operations Test: ✅ PASSED")
+            print(f"\nDatabase Operations Test: {CORE_ICONS['status']} PASSED")
         else:
-            print("\nDatabase Operations Test: ❌ FAILED")
+            print(f"\nDatabase Operations Test: {CORE_ICONS['warning']} FAILED")
         
         # Summary
         print("\n" + "=" * 60)
         print(f"TEST SUMMARY: {tests_passed}/{total_tests} tests passed")
         
         if tests_passed == total_tests:
-            print("🎉 ALL TESTS PASSED!")
+            print(f"{CORE_ICONS['status']} ALL TESTS PASSED!")
         else:
-            print("❌ SOME TESTS FAILED")
+            print(f"{CORE_ICONS['warning']} SOME TESTS FAILED")
         
         return tests_passed == total_tests
 
