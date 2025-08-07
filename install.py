@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Dove
+# Magic Animal: Sea Lion
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -310,38 +310,87 @@ class MarineDataConfigurator:
 
     def _discover_coops_stations(self, latitude, longitude):
         """
-        PRESERVE: Existing CO-OPS station discovery patterns
+        DATA DRIVEN: Use YAML configuration and actual API responses
         """
         try:
-            # PRESERVE: Use existing API calls and discovery logic
-            api_url = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
-            response = urllib.request.urlopen(f"{api_url}?expand=detail")
-            data = json.loads(response.read().decode('utf-8'))
+            # Get API URLs from YAML configuration
+            api_modules = self.yaml_data.get('api_modules', {})
+            coops_config = api_modules.get('coops_module', {})
             
-            # PRESERVE: Existing distance calculation and filtering
-            nearby_stations = []
-            for station in data.get('stations', []):
+            stations_url = coops_config.get('metadata_url', '')
+            products_url_template = coops_config.get('products_url', '')
+            
+            if not stations_url:
+                return []
+            
+            # Get stations from API using YAML-configured URL
+            response = urllib.request.urlopen(stations_url, timeout=30)
+            raw_data = response.read().decode('utf-8')
+            data = json.loads(raw_data)
+            
+            # Process stations from actual API response
+            all_stations = []
+            stations_list = data.get('stations', [])
+            
+            for station_data in stations_list:
                 try:
-                    station_lat = float(station.get('lat', 0))
-                    station_lon = float(station.get('lng', 0))
+                    station_lat = float(station_data.get('lat', 0))
+                    station_lon = float(station_data.get('lng', 0))
                     distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
                     
-                    if distance <= 100:  # Within 100 miles
-                        nearby_stations.append({
-                            'id': station.get('id'),
-                            'name': station.get('name'),
-                            'distance': distance
-                        })
+                    # Preserve all API data
+                    station_record = dict(station_data)
+                    station_record['distance'] = distance
+                    all_stations.append(station_record)
+                    
                 except (ValueError, TypeError):
                     continue
             
-            # Sort by distance and return station IDs
-            nearby_stations.sort(key=lambda x: x['distance'])
-            return nearby_stations[:5]
+            # Sort by distance and take top 10
+            all_stations.sort(key=lambda x: x['distance'])
+            closest_stations = all_stations[:10]
+            
+            # Get capabilities using YAML-configured products URL
+            final_stations = []
+            for station in closest_stations:
+                station_id = station.get('id')
+                
+                if products_url_template and station_id:
+                    try:
+                        products_url = products_url_template.format(station_id=station_id)
+                        products_response = urllib.request.urlopen(products_url, timeout=10)
+                        products_data = json.loads(products_response.read().decode('utf-8'))
+                        
+                        # Get capability mapping from YAML
+                        coops_config = self.yaml_data.get('api_modules', {}).get('coops_module', {})
+                        capability_mapping = coops_config.get('product_capability_mapping', {})
+                        
+                        # Extract capabilities using YAML mapping
+                        capabilities = []
+                        products_list = products_data.get('products', [])
+                        
+                        for product in products_list:
+                            product_name = product.get('name', '')
+                            
+                            # Use YAML capability mapping
+                            for capability, keywords in capability_mapping.items():
+                                if any(keyword.lower() in product_name.lower() for keyword in keywords):
+                                    capabilities.append(capability)
+                        
+                        station['capabilities'] = list(set(capabilities)) if capabilities else []
+                        
+                    except Exception:
+                        station['capabilities'] = []
+                else:
+                    station['capabilities'] = []
+                
+                final_stations.append(station)
+            
+            return final_stations
             
         except Exception as e:
-            print(f"{CORE_ICONS['warning']} Error discovering CO-OPS stations: {e}")
-            return ['9414290']  # Default station
+            print(f"Error discovering stations: {e}")
+            return []
 
     def _discover_ndbc_stations(self, latitude, longitude):
         """
@@ -482,7 +531,7 @@ class MarineDataConfigurator:
 
     def _curses_station_page(self, stations, page_title):
         """
-        NEW METHOD: Single curses page for station selection with capabilities
+        FIXED: Curses interface with proper spacing and scrolling
         """
         def station_selection_screen(stdscr):
             curses.curs_set(0)  # Hide cursor
@@ -490,13 +539,14 @@ class MarineDataConfigurator:
             
             selected_indices = set()
             current_row = 0
+            scroll_offset = 0
             max_row = len(stations) - 1
             
             while True:
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
                 
-                # Header with proper icon
+                # Header
                 header = f"{CORE_ICONS['navigation']} {page_title}"
                 stdscr.addstr(0, 0, header, curses.A_BOLD)
                 stdscr.addstr(1, 0, "=" * min(len(header), width-1))
@@ -511,36 +561,77 @@ class MarineDataConfigurator:
                     if 2 + i < height - 1:
                         stdscr.addstr(2 + i, 0, instruction[:width-1])
                 
-                start_row = 5
+                # Calculate display area
+                start_display_row = 5
+                available_lines = height - start_display_row - 2  # Leave room for status
+                lines_per_station = 3  # Station line + capabilities line + blank line
+                stations_per_page = available_lines // lines_per_station
                 
-                # Station list
-                for i, station in enumerate(stations):
-                    if start_row + i >= height - 2:
+                # Calculate scroll bounds
+                if current_row >= scroll_offset + stations_per_page:
+                    scroll_offset = current_row - stations_per_page + 1
+                elif current_row < scroll_offset:
+                    scroll_offset = current_row
+                    
+                scroll_offset = max(0, min(scroll_offset, len(stations) - stations_per_page))
+                
+                # Display stations
+                display_row = start_display_row
+                for i in range(scroll_offset, min(scroll_offset + stations_per_page, len(stations))):
+                    if display_row >= height - 3:
                         break
                         
-                    y_pos = start_row + i
+                    station = stations[i]
                     
                     # Selection indicator
                     checkbox = "[X]" if i in selected_indices else "[ ]"
                     
-                    # Station info
-                    station_info = f"{checkbox} {station.get('name', 'Unknown')} ({station.get('id', 'N/A')}) - {station.get('distance', 0):.1f} mi"
+                    # Station info line
+                    distance = station.get('distance', 0)
+                    station_name = station.get('name', 'Unknown')
+                    station_id = station.get('id', 'N/A')
+                    state = station.get('state', '')
                     
-                    # Capabilities on next line
-                    capabilities = self._format_station_capabilities(station.get('capabilities', []))
+                    station_line = f"{checkbox} {station_name} ({station_id}) - {distance:.1f} mi"
+                    if state:
+                        station_line += f" [{state}]"
                     
                     # Highlight current row
                     attr = curses.A_REVERSE if i == current_row else curses.A_NORMAL
                     
                     try:
-                        stdscr.addstr(y_pos, 0, station_info[:width-1], attr)
-                        if y_pos + 1 < height - 1 and capabilities:
-                            stdscr.addstr(y_pos + 1, 4, capabilities[:width-5], curses.A_DIM)
+                        stdscr.addstr(display_row, 0, station_line[:width-1], attr)
+                        
+                        # Capabilities line (indented)
+                        capabilities = station.get('capabilities', [])
+                        if capabilities:
+                            cap_text = "    Capabilities: " + ", ".join(capabilities)
+                        else:
+                            cap_text = "    Capabilities: Unknown"
+                        
+                        stdscr.addstr(display_row + 1, 0, cap_text[:width-1], curses.A_DIM)
+                        
+                        # Blank line for spacing
+                        display_row += 3
+                        
                     except curses.error:
-                        pass  # Handle screen boundary
+                        break  # Screen boundary reached
+                
+                # Scroll indicators
+                if scroll_offset > 0:
+                    try:
+                        stdscr.addstr(start_display_row - 1, width - 10, "↑ More ↑", curses.A_BOLD)
+                    except curses.error:
+                        pass
+                        
+                if scroll_offset + stations_per_page < len(stations):
+                    try:
+                        stdscr.addstr(height - 3, width - 10, "↓ More ↓", curses.A_BOLD)
+                    except curses.error:
+                        pass
                 
                 # Status line
-                status = f"Selected: {len(selected_indices)} stations | ENTER to continue"
+                status = f"Selected: {len(selected_indices)} | Station {current_row + 1}/{len(stations)} | ENTER to continue"
                 try:
                     stdscr.addstr(height-1, 0, status[:width-1], curses.A_BOLD)
                 except curses.error:
