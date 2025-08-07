@@ -193,18 +193,18 @@ class MarineDataConfigurator:
         print(f" {CORE_ICONS['status']}")
         
         if not selected_fields:
-            print("⚠️  No fields selected. Extension will be installed but disabled.")
+            print(f"{CORE_ICONS['warning']}  No fields selected. Extension will be installed but disabled.")
             return {}, {}
         
         # Station selection per module
-        print("\n🚢 STATION SELECTION...")
+        print("STATION SELECTION...")
         selected_stations = self._select_stations_per_module(stations, selected_fields)
         
         # Get collection intervals
         intervals = self._get_collection_intervals()
         
         # Generate configuration using comprehensive method
-        print("\n⚙️  GENERATING CONFIGURATION...")
+        print("GENERATING CONFIGURATION...")
         config_dict = self._write_configuration_files(selected_stations, selected_fields, intervals, user_lat, user_lon)
         
         return config_dict, {
