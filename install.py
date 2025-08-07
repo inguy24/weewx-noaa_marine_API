@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Rhesus Monkey
+# Magic Animal: Cormorant
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -898,8 +898,103 @@ class MarineDataConfigurator:
         # NEW: Use curses interface for selection
         selected_fields = self._interactive_field_selection_curses(fields)
         self.selected_fields = selected_fields
-    # PRESERVE: All existing API client classes and helper functions would continue here
-    # These are not being modified as they follow the existing YAML-driven patterns
+
+    def _generate_configuration_from_yaml(self):
+        """
+        CRITICAL METHOD: Transform YAML field definitions into WeeWX config_dict structure
+        
+        This creates the field_mappings that marine_data.py reads at runtime for:
+        - Data extraction from APIs (api_path)
+        - Table routing (database_table) 
+        - Field mapping (database_field)
+        - Unit conversions (unit_group)
+        """
+        config = {
+            'MarineDataService': {
+                'enable': 'true',
+                'timeout': '30',
+                'log_success': 'false',
+                'log_errors': 'true', 
+                'retry_attempts': '3',
+                'user_latitude': str(getattr(self, 'user_latitude', 33.6595)),
+                'user_longitude': str(getattr(self, 'user_longitude', -117.9988))
+            }
+        }
+        
+        # CRITICAL: Write selected stations to config
+        selected_stations = config['MarineDataService'].setdefault('selected_stations', {})
+        for module_name, station_list in self.selected_stations.items():
+            station_config = selected_stations.setdefault(module_name.replace('_module', '_stations'), {})
+            for station_id in station_list:
+                station_config[station_id] = 'true'  # String values required
+        
+        # CRITICAL: Write field selection for service initialization
+        field_selection = config['MarineDataService'].setdefault('field_selection', {})
+        field_selection['selection_timestamp'] = str(int(time.time()))
+        field_selection['config_version'] = '1.0'
+        field_selection['complexity_level'] = 'custom'
+        
+        # Group selected fields by module for service
+        selected_field_groups = field_selection.setdefault('selected_fields', {})
+        coops_fields = []
+        ndbc_fields = []
+        
+        # CRITICAL: Transform YAML fields into runtime field mappings
+        fields = self.yaml_data.get('fields', {})
+        field_mappings = config['MarineDataService'].setdefault('field_mappings', {})
+        
+        for field_name, is_selected in self.selected_fields.items():
+            if is_selected and field_name in fields:
+                field_config = fields[field_name]
+                api_module = field_config.get('api_module', 'unknown_module')
+                
+                # Group fields by module for field_selection
+                if api_module == 'coops_module':
+                    coops_fields.append(field_name)
+                elif api_module == 'ndbc_module':
+                    ndbc_fields.append(field_name)
+                
+                # CRITICAL: Create field mappings for runtime service
+                module_mappings = field_mappings.setdefault(api_module, {})
+                module_mappings[field_name] = {
+                    'database_field': field_config.get('database_field', field_name),
+                    'database_type': field_config.get('database_type', 'REAL'),
+                    'database_table': field_config.get('database_table', 'archive'),
+                    'api_path': field_config.get('api_path', ''),
+                    'unit_group': field_config.get('unit_group', 'group_count'),
+                    'api_product': field_config.get('api_product', ''),
+                    'description': field_config.get('description', '')
+                }
+        
+        # Write grouped field selections
+        if coops_fields:
+            selected_field_groups['coops_module'] = ', '.join(coops_fields)
+        if ndbc_fields:
+            selected_field_groups['ndbc_module'] = ', '.join(ndbc_fields)
+        
+        # CRITICAL: Write collection intervals
+        collection_intervals = config['MarineDataService'].setdefault('collection_intervals', {})
+        collection_intervals['coops_collection_interval'] = '600'      # 10 minutes
+        collection_intervals['tide_predictions_interval'] = '21600'    # 6 hours
+        collection_intervals['ndbc_weather_interval'] = '3600'         # 1 hour
+        collection_intervals['ndbc_ocean_interval'] = '3600'           # 1 hour
+        
+        # CRITICAL: Write unit system configuration
+        unit_system = config['MarineDataService'].setdefault('unit_system', {})
+        unit_system['weewx_system'] = 'US'
+        
+        # CRITICAL: Write API endpoints for configurable URLs
+        api_endpoints = config['MarineDataService'].setdefault('api_endpoints', {})
+        api_modules = self.yaml_data.get('api_modules', {})
+        
+        for module_name, module_config in api_modules.items():
+            endpoint_config = api_endpoints.setdefault(module_name, {})
+            endpoint_config['base_url'] = module_config.get('api_url', '')
+            endpoint_config['timeout'] = str(module_config.get('timeout', 30))
+            endpoint_config['retry_attempts'] = str(module_config.get('retry_attempts', 3))
+        
+        return config
+
 
 class COOPSAPIClient:
     """
