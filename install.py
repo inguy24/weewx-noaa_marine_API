@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Pelican
+# Magic Animal: Sea Gull
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -337,7 +337,7 @@ class MarineDataConfigurator:
             
             # Sort by distance and return station IDs
             nearby_stations.sort(key=lambda x: x['distance'])
-            return [station['id'] for station in nearby_stations[:5]]
+            return nearby_stations[:5]
             
         except Exception as e:
             print(f"{CORE_ICONS['warning']} Error discovering CO-OPS stations: {e}")
