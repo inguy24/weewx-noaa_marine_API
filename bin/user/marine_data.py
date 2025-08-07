@@ -1359,4 +1359,7 @@ class TideTableSearchList(SearchList):
                     'formatted_time': datetime.fromtimestamp(row[0]).strftime('%I:%M %p'),
                     'formatted_height': f"{row[1]:.1f} ft"
                 }
-        except Exception as e
+
+        except Exception as e:
+            log.error(f"Error getting next {tide_type} tide: {e}")
+        return None
