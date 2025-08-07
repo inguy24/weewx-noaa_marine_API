@@ -269,15 +269,27 @@ class MarineDataConfigurator:
 
     def _load_yaml_configuration(self):
         """
-        PRESERVE: Load YAML configuration using existing patterns
+        FIXED: Load YAML configuration using WeeWX methodology
         """
         try:
-            yaml_path = '/usr/share/weewx/user/marine_data_fields.yaml'
+            # Use extension directory location (where install.py is located)
+            extension_dir = os.path.dirname(__file__)
+            yaml_path = os.path.join(extension_dir, 'marine_data_fields.yaml')
+            
+            print(f"DEBUG: Looking for YAML at: {yaml_path}")
+            print(f"DEBUG: Extension dir: {extension_dir}")
+            print(f"DEBUG: YAML exists: {os.path.exists(yaml_path)}")
+            
             if os.path.exists(yaml_path):
                 with open(yaml_path, 'r') as file:
                     self.yaml_data = yaml.safe_load(file)
+                    print(f"DEBUG: YAML loaded successfully, keys: {list(self.yaml_data.keys())}")
+            else:
+                print("DEBUG: YAML file not found")
+                self.yaml_data = {}
+                    
         except Exception as e:
-            print(f"{CORE_ICONS['warning']} Warning: Could not load YAML configuration: {e}")
+            print(f"DEBUG: YAML loading error: {e}")
             self.yaml_data = {}
 
     def run_interactive_setup(self):
