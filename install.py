@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Baboon
+# Magic Animal: Rhesus Monkey
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -475,9 +475,406 @@ class MarineDataConfigurator:
         module_config = api_modules.get(module_name, {})
         return module_config.get('recommended_interval', 3600)
 
+    def _interactive_station_selection_curses(self, coops_stations, ndbc_stations):
+        """
+        NEW METHOD: Two-page curses interface for station selection
+        Called from existing _discover_and_select_stations() method
+        """
+        selected_stations = {'coops_module': [], 'ndbc_module': []}
+        
+        try:
+            # Page 1: CO-OPS stations
+            if coops_stations:
+                selected_coops = self._curses_station_page(coops_stations, "CO-OPS Tide Stations")
+                selected_stations['coops_module'] = selected_coops
+            
+            # Page 2: NDBC stations  
+            if ndbc_stations:
+                selected_ndbc = self._curses_station_page(ndbc_stations, "NDBC Marine Weather Buoys")
+                selected_stations['ndbc_module'] = selected_ndbc
+                
+        except Exception as e:
+            print(f"{CORE_ICONS['warning']} Error in station selection: {e}")
+            # Fallback to first stations if curses fails
+            selected_stations['coops_module'] = coops_stations[:2] if coops_stations else []
+            selected_stations['ndbc_module'] = ndbc_stations[:1] if ndbc_stations else []
+        
+        return selected_stations
 
-# PRESERVE: All existing API client classes and helper functions would continue here
-# These are not being modified as they follow the existing YAML-driven patterns
+    def _curses_station_page(self, stations, page_title):
+        """
+        NEW METHOD: Single curses page for station selection with capabilities
+        """
+        def station_selection_screen(stdscr):
+            curses.curs_set(0)  # Hide cursor
+            stdscr.clear()
+            
+            selected_indices = set()
+            current_row = 0
+            max_row = len(stations) - 1
+            
+            while True:
+                stdscr.clear()
+                height, width = stdscr.getmaxyx()
+                
+                # Header with proper icon
+                header = f"{CORE_ICONS['navigation']} {page_title}"
+                stdscr.addstr(0, 0, header, curses.A_BOLD)
+                stdscr.addstr(1, 0, "=" * min(len(header), width-1))
+                
+                # Instructions
+                instructions = [
+                    "Use arrow keys to navigate, SPACE to select/deselect, ENTER to continue",
+                    "Select multiple stations for backup coverage during maintenance periods"
+                ]
+                
+                for i, instruction in enumerate(instructions):
+                    if 2 + i < height - 1:
+                        stdscr.addstr(2 + i, 0, instruction[:width-1])
+                
+                start_row = 5
+                
+                # Station list
+                for i, station in enumerate(stations):
+                    if start_row + i >= height - 2:
+                        break
+                        
+                    y_pos = start_row + i
+                    
+                    # Selection indicator
+                    checkbox = "[X]" if i in selected_indices else "[ ]"
+                    
+                    # Station info
+                    station_info = f"{checkbox} {station.get('name', 'Unknown')} ({station.get('id', 'N/A')}) - {station.get('distance', 0):.1f} mi"
+                    
+                    # Capabilities on next line
+                    capabilities = self._format_station_capabilities(station.get('capabilities', []))
+                    
+                    # Highlight current row
+                    attr = curses.A_REVERSE if i == current_row else curses.A_NORMAL
+                    
+                    try:
+                        stdscr.addstr(y_pos, 0, station_info[:width-1], attr)
+                        if y_pos + 1 < height - 1 and capabilities:
+                            stdscr.addstr(y_pos + 1, 4, capabilities[:width-5], curses.A_DIM)
+                    except curses.error:
+                        pass  # Handle screen boundary
+                
+                # Status line
+                status = f"Selected: {len(selected_indices)} stations | ENTER to continue"
+                try:
+                    stdscr.addstr(height-1, 0, status[:width-1], curses.A_BOLD)
+                except curses.error:
+                    pass
+                
+                stdscr.refresh()
+                
+                # Handle input
+                key = stdscr.getch()
+                
+                if key == curses.KEY_UP and current_row > 0:
+                    current_row -= 1
+                elif key == curses.KEY_DOWN and current_row < max_row:
+                    current_row += 1
+                elif key == ord(' '):  # Spacebar to select/deselect
+                    if current_row in selected_indices:
+                        selected_indices.remove(current_row)
+                    else:
+                        selected_indices.add(current_row)
+                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter to continue
+                    break
+                elif key == ord('q') or key == ord('Q'):  # Quit
+                    return []
+            
+            # Return selected stations
+            return [stations[i] for i in selected_indices]
+        
+        try:
+            return curses.wrapper(station_selection_screen)
+        except Exception as e:
+            print(f"{CORE_ICONS['warning']} Curses interface error: {e}")
+            return stations[:2]  # Fallback selection
+
+    def _format_station_capabilities(self, capabilities):
+        """
+        NEW METHOD: Format station capabilities for display
+        """
+        if not capabilities:
+            return "Capabilities: Unknown"
+        
+        # Map capabilities to user-friendly descriptions
+        capability_map = {
+            'water_level_observed': 'Real-time Water Level',
+            'tide_predictions': 'Tide Predictions',
+            'water_temperature': 'Water Temperature',
+            'meteorological': 'Weather Data',
+            'currents': 'Current Data'
+        }
+        
+        friendly_caps = []
+        for cap in capabilities:
+            friendly_name = capability_map.get(cap, cap.replace('_', ' ').title())
+            friendly_caps.append(friendly_name)
+        
+        return f"Capabilities: {', '.join(friendly_caps)}"
+
+    def _enhance_coops_stations_with_capabilities(self, stations):
+        """
+        NEW METHOD: Add capability detection to CO-OPS stations
+        """
+        enhanced_stations = []
+        
+        for station in stations:
+            enhanced_station = station.copy()
+            
+            # Get station capabilities from NOAA API
+            capabilities = self._get_coops_station_capabilities(station['id'])
+            enhanced_station['capabilities'] = capabilities
+            
+            enhanced_stations.append(enhanced_station)
+        
+        return enhanced_stations
+
+    def _get_coops_station_capabilities(self, station_id):
+        """
+        NEW METHOD: Detect CO-OPS station capabilities via API
+        """
+        capabilities = []
+        
+        try:
+            # Check station products API
+            products_url = f"https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}/products.json"
+            
+            response = urllib.request.urlopen(products_url, timeout=10)
+            data = json.loads(response.read().decode('utf-8'))
+            
+            products = data.get('products', [])
+            
+            # Map products to capabilities
+            for product in products:
+                product_name = product.get('name', '').lower()
+                
+                if 'water level' in product_name or 'verified' in product_name:
+                    capabilities.append('water_level_observed')
+                elif 'prediction' in product_name or 'harmonic' in product_name:
+                    capabilities.append('tide_predictions')
+                elif 'water temp' in product_name:
+                    capabilities.append('water_temperature')
+                elif 'meteorological' in product_name or 'wind' in product_name:
+                    capabilities.append('meteorological')
+                elif 'current' in product_name:
+                    capabilities.append('currents')
+            
+            # Remove duplicates
+            capabilities = list(set(capabilities))
+            
+        except Exception as e:
+            # Default capabilities if API fails
+            capabilities = ['water_level_observed', 'tide_predictions']
+        
+        return capabilities
+
+    def _enhance_ndbc_stations_with_capabilities(self, stations):
+        """
+        NEW METHOD: Add capability detection to NDBC stations
+        """
+        enhanced_stations = []
+        
+        for station in stations:
+            enhanced_station = station.copy()
+            
+            # NDBC stations typically have standard capabilities
+            capabilities = ['wave_data', 'wind_data', 'sea_surface_temperature', 'barometric_pressure']
+            enhanced_station['capabilities'] = capabilities
+            
+            enhanced_stations.append(enhanced_station)
+        
+        return enhanced_stations
+
+    def _interactive_field_selection_curses(self, available_fields):
+        """
+        NEW METHOD: Curses interface for field selection organized by module
+        """
+        def field_selection_screen(stdscr):
+            curses.curs_set(0)
+            stdscr.clear()
+            
+            # Organize fields by module
+            coops_fields = []
+            ndbc_fields = []
+            
+            for field_name, field_config in available_fields.items():
+                api_module = field_config.get('api_module', '')
+                field_display = {
+                    'name': field_name,
+                    'display_name': field_config.get('display_name', field_name),
+                    'description': field_config.get('description', ''),
+                    'config': field_config
+                }
+                
+                if 'coops' in api_module:
+                    coops_fields.append(field_display)
+                elif 'ndbc' in api_module:
+                    ndbc_fields.append(field_display)
+            
+            all_fields = coops_fields + ndbc_fields
+            selected_indices = set(range(len(all_fields)))  # Start with all selected
+            current_row = 0
+            max_row = len(all_fields) - 1
+            
+            while True:
+                stdscr.clear()
+                height, width = stdscr.getmaxyx()
+                
+                # Header
+                header = f"{CORE_ICONS['selection']} Marine Data Field Selection"
+                stdscr.addstr(0, 0, header, curses.A_BOLD)
+                stdscr.addstr(1, 0, "=" * min(len(header), width-1))
+                
+                # Instructions
+                instructions = [
+                    "Use arrow keys to navigate, SPACE to select/deselect, ENTER to continue",
+                    "All fields selected by default - deselect unwanted fields"
+                ]
+                
+                for i, instruction in enumerate(instructions):
+                    if 2 + i < height - 1:
+                        stdscr.addstr(2 + i, 0, instruction[:width-1])
+                
+                start_row = 5
+                
+                # CO-OPS section
+                if coops_fields:
+                    try:
+                        stdscr.addstr(start_row, 0, "CO-OPS (Tides & Water Levels):", curses.A_BOLD)
+                        start_row += 1
+                    except curses.error:
+                        pass
+                
+                current_field_index = 0
+                
+                # Display fields
+                for section_fields, section_name in [(coops_fields, "CO-OPS"), (ndbc_fields, "NDBC")]:
+                    if section_fields and section_name == "NDBC":
+                        try:
+                            if start_row + len(coops_fields) + 2 < height:
+                                stdscr.addstr(start_row + len(coops_fields) + 1, 0, "NDBC (Marine Weather):", curses.A_BOLD)
+                        except curses.error:
+                            pass
+                    
+                    for i, field in enumerate(section_fields):
+                        row_pos = start_row + current_field_index + (1 if section_name == "NDBC" and coops_fields else 0)
+                        
+                        if row_pos >= height - 2:
+                            break
+                        
+                        # Selection indicator
+                        checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
+                        
+                        # Field info
+                        field_line = f"  {checkbox} {field['display_name']}"
+                        
+                        # Highlight current row
+                        attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
+                        
+                        try:
+                            stdscr.addstr(row_pos, 0, field_line[:width-1], attr)
+                            
+                            # Description on next line if space
+                            if row_pos + 1 < height - 2 and field['description']:
+                                desc_line = f"    {field['description']}"
+                                stdscr.addstr(row_pos + 1, 0, desc_line[:width-1], curses.A_DIM)
+                        except curses.error:
+                            pass
+                        
+                        current_field_index += 1
+                
+                # Status line
+                status = f"Selected: {len(selected_indices)}/{len(all_fields)} fields | ENTER to continue"
+                try:
+                    stdscr.addstr(height-1, 0, status[:width-1], curses.A_BOLD)
+                except curses.error:
+                    pass
+                
+                stdscr.refresh()
+                
+                # Handle input
+                key = stdscr.getch()
+                
+                if key == curses.KEY_UP and current_row > 0:
+                    current_row -= 1
+                elif key == curses.KEY_DOWN and current_row < max_row:
+                    current_row += 1
+                elif key == ord(' '):  # Spacebar
+                    if current_row in selected_indices:
+                        selected_indices.remove(current_row)
+                    else:
+                        selected_indices.add(current_row)
+                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter
+                    break
+                elif key == ord('q') or key == ord('Q'):  # Quit
+                    return {}
+            
+            # Return selected fields
+            selected_fields = {}
+            for i in selected_indices:
+                if i < len(all_fields):
+                    field_name = all_fields[i]['name']
+                    selected_fields[field_name] = True
+            
+            return selected_fields
+        
+        try:
+            return curses.wrapper(field_selection_screen)
+        except Exception as e:
+            print(f"{CORE_ICONS['warning']} Field selection error: {e}")
+            # Fallback to all fields
+            return {name: True for name in available_fields.keys()}
+
+    def _discover_and_select_stations(self):
+        """
+        MODIFIED: Add curses interface call to existing method
+        """
+        # Get user location (existing code unchanged)
+        try:
+            latitude = float(input("Enter latitude (decimal degrees): "))
+            longitude = float(input("Enter longitude (decimal degrees): "))
+        except ValueError:
+            latitude, longitude = 33.6595, -117.9988
+            print(f"Using default location: Huntington Beach, CA")
+
+        self.user_latitude = latitude
+        self.user_longitude = longitude
+
+        # Discover stations with progress indicator
+        progress = InstallationProgressManager()
+        
+        progress.show_step_progress("Discovering CO-OPS stations")
+        coops_stations = self._discover_coops_stations(latitude, longitude)
+        enhanced_coops = self._enhance_coops_stations_with_capabilities(coops_stations)
+        progress.complete_step("Discovering CO-OPS stations")
+        
+        progress.show_step_progress("Discovering NDBC stations")
+        ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
+        enhanced_ndbc = self._enhance_ndbc_stations_with_capabilities(ndbc_stations)
+        progress.complete_step("Discovering NDBC stations")
+        
+        # NEW: Use curses interface for selection
+        selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
+        self.selected_stations = selected_stations
+
+    def _select_fields_from_yaml(self):
+        """
+        MODIFIED: Add curses interface call to existing method
+        """
+        # Get available fields from YAML (existing code unchanged)
+        fields = self.yaml_data.get('fields', {})
+        
+        # NEW: Use curses interface for selection
+        selected_fields = self._interactive_field_selection_curses(fields)
+        self.selected_fields = selected_fields
+    # PRESERVE: All existing API client classes and helper functions would continue here
+    # These are not being modified as they follow the existing YAML-driven patterns
 
 class COOPSAPIClient:
     """
