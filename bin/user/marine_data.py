@@ -87,7 +87,7 @@ class MarineDataService(StdService):
             self.db_manager = engine.db_binder.get_manager('wx_binding')
             log.info("Marine Data service using WeeWX database manager")
         except Exception as e:
-            log.error(f"Error getting next {tide_type} tide: {e}")
+            log.error(f"Error getting next tide: {e}")
         return None
 
     def _get_today_tides(self, db_manager):
