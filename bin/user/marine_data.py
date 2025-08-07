@@ -37,7 +37,7 @@ from weeutil.weeutil import to_bool
 
 log = weeutil.logger.logging.getLogger(__name__)
 
-VERSION = "1.0.0a"
+VERSION = "1.0.0"
 
 # CONSISTENT ICONS: Match install.py for consistency
 CORE_ICONS = {
@@ -549,54 +549,41 @@ class MarineDataTester:
                 result = manager.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 return [row[0] for row in result.fetchall()]
 
-
-def main():
-    """Command-line interface for testing and debugging"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Marine Data Extension Testing and Debugging')
-    parser.add_argument('--test-install', action='store_true', help='Test installation only')
-    parser.add_argument('--test-api', action='store_true', help='Test API connectivity only')
-    parser.add_argument('--test-db', action='store_true', help='Test database operations only')
-    parser.add_argument('--test-all', action='store_true', help='Run all tests')
-    
-    args = parser.parse_args()
-    
-    if not any([args.test_install, args.test_api, args.test_db, args.test_all]):
-        print("Marine Data Extension - Use --help for options")
-        print("Quick test: python3 marine_data.py --test-all")
-        return
-    
-    tester = MarineDataTester()
-    
-    success = False
-    if args.test_all:
-        success = tester.run_all_tests()
-    elif args.test_install:
-        success = tester.test_installation()
-    elif args.test_api:
-        success = tester.test_api_connectivity()
-    elif args.test_db:
-        success = tester.test_database_operations()
-    
-    sys.exit(0 if success else 1)
-
-
-if __name__ == '__main__':
-    main():
-            log.error(f"Failed to initialize WeeWX database manager: {e}")
-            self.service_enabled = False
+    def main():
+        """Command-line interface for testing and debugging"""
+        import argparse
+        
+        parser = argparse.ArgumentParser(description='Marine Data Extension Testing and Debugging')
+        parser.add_argument('--test-install', action='store_true', help='Test installation only')
+        parser.add_argument('--test-api', action='store_true', help='Test API connectivity only')
+        parser.add_argument('--test-db', action='store_true', help='Test database operations only')
+        parser.add_argument('--test-all', action='store_true', help='Run all tests')
+        
+        args = parser.parse_args()
+        
+        if not any([args.test_install, args.test_api, args.test_db, args.test_all]):
+            print("Marine Data Extension - Use --help for options")
+            print("Quick test: python3 marine_data.py --test-all")
             return
         
-        # SUCCESS MANUAL PATTERN: Load configuration from config_dict
-        self.selected_stations = self._load_station_selection()
-        self.field_mappings = self._load_field_mappings()
+        tester = MarineDataTester()
         
-        if not self.selected_stations:
-            log.error("No stations configured - marine data collection disabled")
-            self.service_enabled = False
-            return
+        success = False
+        if args.test_all:
+            success = tester.run_all_tests()
+        elif args.test_install:
+            success = tester.test_installation()
+        elif args.test_api:
+            success = tester.test_api_connectivity()
+        elif args.test_db:
+            success = tester.test_database_operations()
         
+        sys.exit(0 if success else 1)
+
+
+        if __name__ == '__main__':
+            main()
+                
         if not self.field_mappings:
             log.error("No field mappings found - service disabled")
             self.service_enabled = False
