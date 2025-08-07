@@ -119,24 +119,16 @@ class MarineDataInstaller(ExtensionInstaller):
         try:
             print("Installing Marine Data Extension...")
             
-            # Step 1: PRESERVE - Interactive configuration using existing patterns
-            configurator = MarineDataConfigurator()
-            config_dict, selected_options = configurator.run_interactive_setup()
-            
-            # Step 2: FIXED - Create marine tables using WeeWX manager (not custom connections)
-            self._create_marine_tables_weewx_compliant(engine, config_dict, selected_options)
-            
-            # Step 3: PRESERVE - Update engine configuration per existing pattern
-            engine.config_dict.update(config_dict)
-            
-            # Step 4: PRESERVE - Complete parent installation per existing pattern
+            configurator = MarineDataConfigurator(engine.config_dict)
+            config_dict, selected_options = configurator.run_interactive_setup()           
+            self._create_marine_tables_weewx_compliant(engine, config_dict, selected_options)         
+            engine.config_dict.update(config_dict)           
             super().configure(engine)
             
             print("Installation complete! Restart WeeWX to activate.")
             return True
             
         except Exception as e:
-            # Handle known ConfigObj cosmetic errors (existing pattern)
             if "not a string" in str(e) and "False" in str(e):
                 print(f"Warning (ignored): {e}")
                 print("Installation completed successfully despite warning.")
@@ -268,7 +260,8 @@ class MarineDataConfigurator:
     - Use existing YAML structure completely
     """
     
-    def __init__(self):
+    def __init__(self, config_dict=None):
+        self.config_dict = config_dict
         self.selected_stations = {}
         self.selected_fields = {}
         self.yaml_data = {}
@@ -319,20 +312,15 @@ class MarineDataConfigurator:
         """
         PRESERVE: Existing station discovery patterns
         """
-        # Get user location (simplified input)
-        try:
-            latitude = float(input("Enter latitude (decimal degrees): "))
-            longitude = float(input("Enter longitude (decimal degrees): "))
-        except ValueError:
-            # Default to Huntington Beach, CA for demo
-            latitude, longitude = 33.6595, -117.9988
-            print(f"Using default location: Huntington Beach, CA")
+        station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
+        latitude = float(station_config.get('latitude', 33.6595))
+        longitude = float(station_config.get('longitude', -117.9988))
+        location_name = station_config.get('location', 'WeeWX Station')
+        print(f"Using WeeWX station location: {location_name} ({latitude:.4f}, {longitude:.4f})")
 
-        # PRESERVE: Use existing station discovery methods
         coops_stations = self._discover_coops_stations(latitude, longitude)
         ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
         
-        # PRESERVE: Use existing selection patterns
         self.selected_stations = {
             'coops_module': coops_stations[:2],  # Select first 2 CO-OPS stations
             'ndbc_module': ndbc_stations[:1]     # Select first NDBC station
@@ -981,7 +969,9 @@ class MarineDataConfigurator:
         
         # CRITICAL: Write unit system configuration
         unit_system = config['MarineDataService'].setdefault('unit_system', {})
-        unit_system['weewx_system'] = 'US'
+        convert_config = self.config_dict.get('StdConvert', {}) if self.config_dict else {}
+        weewx_unit_system = convert_config.get('target_unit', 'US')
+        unit_system['weewx_system'] = weewx_unit_system
         
         # CRITICAL: Write API endpoints for configurable URLs
         api_endpoints = config['MarineDataService'].setdefault('api_endpoints', {})
