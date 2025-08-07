@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Sea Gull
+# Magic Animal: Dove
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -348,13 +348,46 @@ class MarineDataConfigurator:
         PRESERVE: Existing NDBC station discovery patterns
         """
         try:
-            # PRESERVE: Use existing NDBC discovery logic
-            # Simplified for this implementation - return common stations
-            return ['46042', '46028']  # Default NDBC stations
+            # Get NDBC metadata URL from YAML configuration
+            api_modules = self.yaml_data.get('api_modules', {})
+            ndbc_config = api_modules.get('ndbc_module', {})
+            metadata_url = ndbc_config.get('metadata_url', '')
+            response = urllib.request.urlopen(metadata_url, timeout=30)
+            content = response.read().decode('utf-8')
+            
+            # Parse XML to extract station info
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(content)
+            
+            nearby_stations = []
+            for station in root.findall('.//station'):
+                try:
+                    station_id = station.get('id')
+                    station_name = station.get('name', f'NDBC {station_id}')
+                    station_lat = float(station.get('lat', 0))
+                    station_lon = float(station.get('lon', 0))
+                    
+                    # Calculate distance
+                    distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
+                    
+                    if distance <= 100:  # Use same distance limit as CO-OPS method
+                        nearby_stations.append({
+                            'id': station_id,
+                            'name': station_name,
+                            'distance': distance
+                        })
+                        
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            
+            # Sort by distance and return closest stations
+            nearby_stations.sort(key=lambda x: x['distance'])
+            return nearby_stations[:5]
             
         except Exception as e:
             print(f"{CORE_ICONS['warning']} Error discovering NDBC stations: {e}")
-            return ['46042']  # Default station
+            # Return empty list on error, no fallbacks
+            return []
 
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """
