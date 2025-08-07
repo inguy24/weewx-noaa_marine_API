@@ -112,14 +112,13 @@ class MarineDataInstaller(ExtensionInstaller):
 
     def configure(self, engine):
         """
-        PRESERVE EXISTING PATTERN: YAML → Interactive setup → config_dict
-        
-        ONLY FIX: Database table creation using WeeWX managers
+        FIXED: Pass engine to configurator for proper WeeWX file path access
         """
         try:
             print("Installing Marine Data Extension...")
             
-            configurator = MarineDataConfigurator(engine.config_dict)
+            # FIXED: Pass engine to configurator for WeeWX-compliant file access
+            configurator = MarineDataConfigurator(engine.config_dict, engine)
             config_dict, selected_options = configurator.run_interactive_setup()           
             self._create_marine_tables_weewx_compliant(engine, config_dict, selected_options)         
             engine.config_dict.update(config_dict)           
@@ -260,8 +259,9 @@ class MarineDataConfigurator:
     - Use existing YAML structure completely
     """
     
-    def __init__(self, config_dict=None):
+    def __init__(self, config_dict=None, engine=None):
         self.config_dict = config_dict
+        self.engine = engine  # Store engine for file path access
         self.selected_stations = {}
         self.selected_fields = {}
         self.yaml_data = {}
@@ -269,27 +269,46 @@ class MarineDataConfigurator:
 
     def _load_yaml_configuration(self):
         """
-        FIXED: Load YAML configuration using WeeWX methodology
+        WeeWX COMPLIANT: Load YAML configuration using engine paths
         """
         try:
-            # Use extension directory location (where install.py is located)
-            extension_dir = os.path.dirname(__file__)
-            yaml_path = os.path.join(extension_dir, 'marine_data_fields.yaml')
-            
-            print(f"DEBUG: Looking for YAML at: {yaml_path}")
-            print(f"DEBUG: Extension dir: {extension_dir}")
-            print(f"DEBUG: YAML exists: {os.path.exists(yaml_path)}")
-            
-            if os.path.exists(yaml_path):
-                with open(yaml_path, 'r') as file:
-                    self.yaml_data = yaml.safe_load(file)
-                    print(f"DEBUG: YAML loaded successfully, keys: {list(self.yaml_data.keys())}")
+            # Use WeeWX engine to get proper paths
+            if self.engine and hasattr(self.engine, 'config_dict'):
+                config_dict = self.engine.config_dict
+                
+                # Get WEEWX_ROOT from engine configuration  
+                weewx_root = config_dict.get('WEEWX_ROOT')
+                if not weewx_root:
+                    # Default: directory of configuration file
+                    weewx_root = os.path.dirname(config_dict.filename)
+                
+                user_root = config_dict.get('USER_ROOT', 'bin/user')
+                
+                # Build path to YAML file using WeeWX methodology
+                yaml_path = os.path.join(weewx_root, user_root, 'marine_data_fields.yaml')
+                
+                print(f"DEBUG: WeeWX engine available")
+                print(f"DEBUG: Config file: {config_dict.filename}")
+                print(f"DEBUG: WEEWX_ROOT: {weewx_root}")
+                print(f"DEBUG: USER_ROOT: {user_root}")
+                print(f"DEBUG: YAML path: {yaml_path}")
+                print(f"DEBUG: YAML exists: {os.path.exists(yaml_path)}")
+                
+                if os.path.exists(yaml_path):
+                    with open(yaml_path, 'r') as file:
+                        self.yaml_data = yaml.safe_load(file)
+                        print(f"DEBUG: YAML loaded successfully, keys: {list(self.yaml_data.keys())}")
+                else:
+                    print("DEBUG: YAML file not found at WeeWX path")
+                    self.yaml_data = {}
             else:
-                print("DEBUG: YAML file not found")
+                print("DEBUG: No WeeWX engine available")
                 self.yaml_data = {}
                     
         except Exception as e:
             print(f"DEBUG: YAML loading error: {e}")
+            import traceback
+            traceback.print_exc()
             self.yaml_data = {}
 
     def run_interactive_setup(self):
