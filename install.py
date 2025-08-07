@@ -430,55 +430,6 @@ class MarineDataConfigurator:
         except:
             return 'minimal'  # Default
 
-    def _generate_configuration_from_yaml(self):
-        """
-        PRESERVE: Existing configuration generation using YAML-driven patterns
-        
-        This follows the exact same pattern as the existing code but with updated
-        tide_table routing from the YAML updates.
-        """
-        config = {
-            'MarineDataService': {
-                'enable': 'true',
-                'timeout': '30',
-                'log_success': 'false',
-                'log_errors': 'true',
-                'retry_attempts': '3',
-                'field_mappings': {},
-                'station_config': {}
-            }
-        }
-        
-        # PRESERVE: Generate field mappings from YAML definitions (existing pattern)
-        fields = self.yaml_data.get('fields', {})
-        
-        # Group selected fields by api_module (existing pattern)
-        module_fields = {}
-        for field_name, field_config in fields.items():
-            if field_name in self.selected_fields and self.selected_fields[field_name]:
-                api_module = field_config.get('api_module', 'unknown_module')
-                
-                if api_module not in module_fields:
-                    module_fields[api_module] = {}
-                
-                module_fields[api_module][field_name] = {
-                    'database_field': field_config.get('database_field', field_name),
-                    'database_type': field_config.get('database_type', 'REAL'),
-                    'database_table': field_config.get('database_table', 'archive'),  # YAML drives this
-                    'api_module': field_config.get('api_module', api_module)
-                }
-        
-        config['MarineDataService']['field_mappings'] = module_fields
-        
-        # PRESERVE: Generate station configuration (existing pattern)
-        for module_name, station_ids in self.selected_stations.items():
-            config['MarineDataService']['station_config'][module_name] = {
-                'stations': station_ids,
-                'update_interval': self._get_update_interval(module_name)
-            }
-        
-        return config
-
     def _get_update_interval(self, module_name):
         """
         PRESERVE: Get appropriate update interval for module (existing pattern)
