@@ -781,13 +781,12 @@ class MarineDataConfigurator:
         """
         MODIFIED: Add curses interface call to existing method
         """
-        # Get user location (existing code unchanged)
-        try:
-            latitude = float(input("Enter latitude (decimal degrees): "))
-            longitude = float(input("Enter longitude (decimal degrees): "))
-        except ValueError:
-            latitude, longitude = 33.6595, -117.9988
-            print(f"Using default location: Huntington Beach, CA")
+
+        station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
+        latitude = float(station_config.get('latitude', 33.6595))
+        longitude = float(station_config.get('longitude', -117.9988))
+        location_name = station_config.get('location', 'WeeWX Station')
+        print(f"Using WeeWX station location: {location_name} ({latitude:.4f}, {longitude:.4f})")
 
         self.user_latitude = latitude
         self.user_longitude = longitude
