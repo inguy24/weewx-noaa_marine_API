@@ -25,6 +25,7 @@ import requests
 import math
 import curses
 import textwrap
+import xml.etree.ElementTree as ET
 from configobj import ConfigObj
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -51,6 +52,30 @@ def loader():
     return MarineDataInstaller()
 
 
+class InstallationProgressManager:
+    """Progress indicator with throbber for long operations"""
+    
+    def __init__(self):
+        self.spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self.current_step = 0
+        
+    def show_step_progress(self, step_name, current=None, total=None):
+        """Show progress for a step with optional counter"""
+        if current is not None and total is not None:
+            char = self.spinner_chars[current % len(self.spinner_chars)]
+            print(f"\r  {char} {step_name}... {current}/{total}", end='', flush=True)
+        else:
+            print(f"  {step_name}...", end='', flush=True)
+    
+    def complete_step(self, step_name):
+        """Mark step as complete"""
+        print(f"\r  {step_name}... {CORE_ICONS['status']}")
+        
+    def show_error(self, step_name, error_msg):
+        """Show step error"""
+        print(f"\r  {step_name}... {CORE_ICONS['warning']}  {error_msg}")
+
+        
 class MarineDataInstaller(ExtensionInstaller):
     """
     WeeWX Extension Installer - PRESERVES existing YAML-driven architecture.
