@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Cormorant
+# Magic Animal: Pelican
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -307,24 +307,6 @@ class MarineDataConfigurator:
         
         print(f"{CORE_ICONS['status']} Configuration complete")
         return config_dict, selected_options
-
-    def _discover_and_select_stations(self):
-        """
-        PRESERVE: Existing station discovery patterns
-        """
-        station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
-        latitude = float(station_config.get('latitude', 33.6595))
-        longitude = float(station_config.get('longitude', -117.9988))
-        location_name = station_config.get('location', 'WeeWX Station')
-        print(f"Using WeeWX station location: {location_name} ({latitude:.4f}, {longitude:.4f})")
-
-        coops_stations = self._discover_coops_stations(latitude, longitude)
-        ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
-        
-        self.selected_stations = {
-            'coops_module': coops_stations[:2],  # Select first 2 CO-OPS stations
-            'ndbc_module': ndbc_stations[:1]     # Select first NDBC station
-        }
 
     def _discover_coops_stations(self, latitude, longitude):
         """
