@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Baboon
+# Magic Animal: Rhesus Monkey
 """
 Copyright 2025 Shane Burkhardt
 """
@@ -29,6 +29,14 @@ try:
 except ImportError:
     print("Error: This installer requires WeeWX 5.1 or later")
     sys.exit(1)
+
+# CORE ICON SET - Maximum 4 icons allowed throughout extension
+CORE_ICONS = {
+    'navigation': '📍',    # Location/station selection
+    'status': '✅',        # Success indicators  
+    'warning': '⚠️',       # Warnings/issues
+    'selection': '🔧'      # Configuration/selection
+}
 
 # REQUIRED: Loader function for WeeWX extension system
 def loader():
@@ -145,7 +153,7 @@ class MarineDataConfigurator:
         yaml_path = os.path.join(extension_dir, 'bin', 'user', 'marine_data_fields.yaml')
         
         if not os.path.exists(yaml_path):
-            print(f"❌ CRITICAL ERROR: marine_data_fields.yaml not found at {yaml_path}")
+            print(f"{CORE_ICONS['warning']} CRITICAL ERROR: marine_data_fields.yaml not found at {yaml_path}")
             print("   This file is REQUIRED for installation.")
             print(f"   Extension directory: {extension_dir}")
             if os.path.exists(extension_dir):
@@ -156,7 +164,7 @@ class MarineDataConfigurator:
             with open(yaml_path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            print(f"❌ CRITICAL ERROR: Cannot load YAML file: {e}")
+            print(f"{CORE_ICONS['warning']} CRITICAL ERROR: Cannot load YAML file: {e}")
             sys.exit(1)
 
     def run_interactive_setup(self):
@@ -164,24 +172,25 @@ class MarineDataConfigurator:
         Run interactive setup following success manual patterns.
         Returns configuration dictionary and selected options.
         """
-        print("\n🌊 MARINE DATA EXTENSION - INTERACTIVE SETUP")
-        print("=" * 60)
+        print("Configuring extension...")
         
         # Get user location for station filtering
         user_lat, user_lon = self._get_user_coordinates()
         
         # Station discovery and selection
-        print("\n📍 DISCOVERING NEARBY MARINE STATIONS...")
+        print(f"{CORE_ICONS['navigation']} Discovering stations...", end='', flush=True)
         stations = self._discover_stations(user_lat, user_lon)
+        print(f" {CORE_ICONS['status']}")
         
         if not stations:
-            print("⚠️  No stations found within reasonable distance.")
+            print(f"{CORE_ICONS['warning']} No stations found within reasonable distance.")
             print("   Try increasing the search radius or check your location.")
             return {}, {}
         
         # Field selection
-        print("\n🔧 FIELD SELECTION...")
+        print(f"{CORE_ICONS['selection']} Selecting fields...", end='', flush=True)
         selected_fields = self._select_fields()
+        print(f" {CORE_ICONS['status']}")
         
         if not selected_fields:
             print("⚠️  No fields selected. Extension will be installed but disabled.")
@@ -964,7 +973,7 @@ class MarineDataConfigurator:
         coops_stations = [s for s in stations if s['type'] == 'coops']
         ndbc_stations = [s for s in stations if s['type'] == 'ndbc']
         
-        print(f"\n🌊 MARINE STATION SELECTION")
+        print(f"\n{CORE_ICONS['selection']} MARINE STATION SELECTION")
         print("="*70)
         print("You will select two types of marine data sources:")
         print("1. CO-OPS: Coastal tide and water level information")
@@ -978,25 +987,25 @@ class MarineDataConfigurator:
             
             # First select COOP stations
             if coops_stations:
-                print("\n📍 Opening CO-OPS station selection interface...")
+                print(f"\n{CORE_ICONS['navigation']} Opening CO-OPS station selection interface...")
                 input("Press ENTER to continue...")
-                coops_selected = self._curses_coops_station_selection(coops_stations, "CO-OPS Tide Stations", "🌊")
+                coops_selected = self._curses_coops_station_selection(coops_stations, "CO-OPS Tide Stations", CORE_ICONS['navigation'])
                 selected_stations.extend(coops_selected)
                 if coops_selected:
-                    print(f"✅ Selected {len(coops_selected)} CO-OPS stations")
+                    print(f"{CORE_ICONS['status']} Selected {len(coops_selected)} CO-OPS stations")
                 else:
-                    print("ℹ️  No CO-OPS stations selected")
+                    print(f"{CORE_ICONS['warning']} No CO-OPS stations selected")
             
             # Then select NDBC stations  
             if ndbc_stations:
-                print("\n📍 Opening NDBC buoy selection interface...")
+                print(f"\n{CORE_ICONS['navigation']} Opening NDBC buoy selection interface...")
                 input("Press ENTER to continue...")
-                ndbc_selected = self._curses_ndbc_station_selection(ndbc_stations, "NDBC Buoy Stations", "🛟")
+                ndbc_selected = self._curses_ndbc_station_selection(ndbc_stations, "NDBC Buoy Stations", CORE_ICONS['navigation'])
                 selected_stations.extend(ndbc_selected)
                 if ndbc_selected:
-                    print(f"✅ Selected {len(ndbc_selected)} NDBC stations")
+                    print(f"{CORE_ICONS['status']} Selected {len(ndbc_selected)} NDBC stations")
                 else:
-                    print("ℹ️  No NDBC stations selected")
+                    print(f"{CORE_ICONS['warning']} No NDBC stations selected")
             
             return selected_stations
             
@@ -1035,7 +1044,7 @@ class MarineDataConfigurator:
                 height, width = stdscr.getmaxyx()
                 
                 # Header with Marine-specific styling
-                header_text = f"{icon} {title}"
+                header_text = f"{CORE_ICONS['navigation']} {title}"
                 try:
                     stdscr.addstr(0, (width - len(header_text)) // 2, header_text, 
                                 curses.color_pair(1) | curses.A_BOLD)
@@ -1046,11 +1055,11 @@ class MarineDataConfigurator:
                 # Enhanced explanation with capability guidance
                 explanation = [
                     "Select marine monitoring stations for data collection.",
-                    "🔍 Review capabilities carefully - not all stations provide all data types.",
-                    "💡 Real-time Water Level: Live sensor measurements",
-                    "💡 Predicted Water Level: Mathematical tide calculations", 
-                    "💡 Subordinate stations: Limited to predictions only",
-                    "🎯 TIP: Choose 2-3 stations with different capabilities for backup coverage."
+                    "Review capabilities carefully - not all stations provide all data types.",
+                    "Real-time Water Level: Live sensor measurements",
+                    "Predicted Water Level: Mathematical tide calculations", 
+                    "Subordinate stations: Limited to predictions only",
+                    "TIP: Choose 2-3 stations with different capabilities for backup coverage."
                 ]
                 
                 # Explanation section
@@ -2383,7 +2392,7 @@ class MarineDataConfigurator:
                 height, width = stdscr.getmaxyx()
                 
                 # Header with NDBC-specific styling
-                header_text = f"{icon} {title}"
+                header_text = f"{CORE_ICONS['navigation']} {title}"
                 try:
                     stdscr.addstr(0, (width - len(header_text)) // 2, header_text, 
                                 curses.color_pair(1) | curses.A_BOLD)
@@ -2394,11 +2403,11 @@ class MarineDataConfigurator:
                 # NDBC-specific explanation
                 explanation = [
                     "Select NDBC marine buoy stations for offshore data collection.",
-                    "🌊 NDBC buoys provide: Wave data, marine weather, sea surface temperature",
-                    "📊 All NDBC stations provide similar data types (no capability detection needed)",
-                    "🏝️  Offshore locations: Better wave data, less sheltered than coastal stations",
-                    "⏱️  Update frequency: Hourly data updates via file downloads",
-                    "🎯 TIP: Choose 2-3 stations at different distances for comprehensive coverage."
+                    "NDBC buoys provide: Wave data, marine weather, sea surface temperature",
+                    "All NDBC stations provide similar data types (no capability detection needed)",
+                    "Offshore locations: Better wave data, less sheltered than coastal stations",
+                    "Update frequency: Hourly data updates via file downloads",
+                    "TIP: Choose 2-3 stations at different distances for comprehensive coverage."
                 ]
                 
                 # Explanation section
