@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Mako
+# Magic Animal: Great White Shark
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -591,238 +591,31 @@ class MarineDataConfigurator:
         module_config = api_modules.get(module_name, {})
         return module_config.get('recommended_interval', 3600)
 
-    def _interactive_field_selection_curses(self, available_fields):
+    def _interactive_station_selection_curses(self, coops_stations, ndbc_stations):
         """
-        IMPROVED: Curses interface with proper spacing, headers, and scrolling
+        NEW METHOD: Two-page curses interface for station selection
+        Called from existing _discover_and_select_stations() method
         """
-        def field_selection_screen(stdscr):
-            curses.curs_set(0)
-            stdscr.clear()
-            
-            # Organize fields by module
-            coops_fields = []
-            ndbc_fields = []
-            
-            for field_name, field_config in available_fields.items():
-                api_module = field_config.get('api_module', '')
-                field_display = {
-                    'name': field_name,
-                    'display_name': field_config.get('display_name', field_name),
-                    'description': field_config.get('description', ''),
-                    'config': field_config
-                }
-                
-                if 'coops' in api_module:
-                    coops_fields.append(field_display)
-                elif 'ndbc' in api_module:
-                    ndbc_fields.append(field_display)
-            
-            all_fields = coops_fields + ndbc_fields
-            selected_indices = set(range(len(all_fields)))  # Start with all selected
-            current_row = 0
-            max_row = len(all_fields) - 1
-            scroll_offset = 0
-            
-            while True:
-                stdscr.clear()
-                height, width = stdscr.getmaxyx()
-                
-                # Header
-                header = f"{CORE_ICONS['selection']} Marine Data Field Selection"
-                stdscr.addstr(0, 0, header, curses.A_BOLD)
-                stdscr.addstr(1, 0, "=" * min(len(header), width-1))
-                
-                # Instructions
-                instructions = [
-                    "Use arrow keys to navigate, SPACE to select/deselect, ENTER to continue",
-                    "All fields selected by default - deselect unwanted fields"
-                ]
-                
-                for i, instruction in enumerate(instructions):
-                    if 2 + i < height - 1:
-                        stdscr.addstr(2 + i, 0, instruction[:width-1])
-                
-                # Calculate display area
-                start_display_row = 5
-                available_lines = height - start_display_row - 2  # Leave room for status
-                lines_per_field = 3  # Field line + description line + blank line
-                lines_per_section_header = 2  # Header line + separator line
-                
-                # Calculate total display lines needed
-                total_lines_needed = 0
-                if coops_fields:
-                    total_lines_needed += lines_per_section_header + (len(coops_fields) * lines_per_field)
-                if ndbc_fields:
-                    total_lines_needed += lines_per_section_header + (len(ndbc_fields) * lines_per_field)
-                
-                # Calculate scrolling
-                max_scroll = max(0, total_lines_needed - available_lines)
-                
-                # Adjust scroll based on current field position
-                current_field_line = 0
-                if coops_fields:
-                    current_field_line += lines_per_section_header
-                    if current_row < len(coops_fields):
-                        current_field_line += current_row * lines_per_field
-                    else:
-                        current_field_line += len(coops_fields) * lines_per_field
-                        if ndbc_fields:
-                            current_field_line += lines_per_section_header
-                            current_field_line += (current_row - len(coops_fields)) * lines_per_field
-                
-                # Auto-scroll to keep current field visible
-                if current_field_line - scroll_offset >= available_lines - 3:
-                    scroll_offset = current_field_line - available_lines + 6
-                elif current_field_line < scroll_offset:
-                    scroll_offset = max(0, current_field_line - 3)
-                
-                scroll_offset = max(0, min(scroll_offset, max_scroll))
-                
-                # Display content with scrolling
-                display_row = start_display_row
-                current_line = 0
-                current_field_index = 0
-                
-                # CO-OPS Section
-                if coops_fields:
-                    # Section header
-                    if current_line >= scroll_offset and display_row < height - 2:
-                        try:
-                            stdscr.addstr(display_row, 0, "CO-OPS (Tides & Water Levels):", curses.A_BOLD)
-                            display_row += 1
-                            stdscr.addstr(display_row, 0, "─" * 30, curses.A_BOLD)
-                            display_row += 1
-                        except curses.error:
-                            pass
-                    current_line += lines_per_section_header
-                    
-                    # CO-OPS fields
-                    for field in coops_fields:
-                        if current_line >= scroll_offset and display_row < height - 2:
-                            # Selection indicator and field name
-                            checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
-                            field_line = f"  {checkbox} {field['display_name']}"
-                            
-                            # Highlight current row
-                            attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
-                            
-                            try:
-                                stdscr.addstr(display_row, 0, field_line[:width-1], attr)
-                                display_row += 1
-                                
-                                # Description line with arrow
-                                if field['description'] and display_row < height - 2:
-                                    desc_line = f"      → {field['description']}"
-                                    stdscr.addstr(display_row, 0, desc_line[:width-1], curses.A_DIM)
-                                    display_row += 1
-                                
-                                # Blank line for spacing
-                                if display_row < height - 2:
-                                    display_row += 1
-                                    
-                            except curses.error:
-                                break
-                        
-                        current_line += lines_per_field
-                        current_field_index += 1
-                
-                # NDBC Section
-                if ndbc_fields:
-                    # Section header
-                    if current_line >= scroll_offset and display_row < height - 2:
-                        try:
-                            stdscr.addstr(display_row, 0, "NDBC (Marine Weather):", curses.A_BOLD)
-                            display_row += 1
-                            stdscr.addstr(display_row, 0, "─" * 30, curses.A_BOLD)
-                            display_row += 1
-                        except curses.error:
-                            pass
-                    current_line += lines_per_section_header
-                    
-                    # NDBC fields
-                    for field in ndbc_fields:
-                        if current_line >= scroll_offset and display_row < height - 2:
-                            # Selection indicator and field name
-                            checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
-                            field_line = f"  {checkbox} {field['display_name']}"
-                            
-                            # Highlight current row
-                            attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
-                            
-                            try:
-                                stdscr.addstr(display_row, 0, field_line[:width-1], attr)
-                                display_row += 1
-                                
-                                # Description line with arrow
-                                if field['description'] and display_row < height - 2:
-                                    desc_line = f"      → {field['description']}"
-                                    stdscr.addstr(display_row, 0, desc_line[:width-1], curses.A_DIM)
-                                    display_row += 1
-                                
-                                # Blank line for spacing
-                                if display_row < height - 2:
-                                    display_row += 1
-                                    
-                            except curses.error:
-                                break
-                        
-                        current_line += lines_per_field
-                        current_field_index += 1
-                
-                # Scroll indicators
-                if scroll_offset > 0:
-                    try:
-                        stdscr.addstr(start_display_row - 1, width - 10, "↑ More ↑", curses.A_BOLD)
-                    except curses.error:
-                        pass
-                
-                if scroll_offset < max_scroll:
-                    try:
-                        stdscr.addstr(height - 3, width - 10, "↓ More ↓", curses.A_BOLD)
-                    except curses.error:
-                        pass
-                
-                # Status line
-                status = f"Selected: {len(selected_indices)}/{len(all_fields)} fields | Field {current_row + 1}/{len(all_fields)} | ENTER to continue"
-                try:
-                    stdscr.addstr(height-1, 0, status[:width-1], curses.A_BOLD)
-                except curses.error:
-                    pass
-                
-                stdscr.refresh()
-                
-                # Handle input
-                key = stdscr.getch()
-                
-                if key == curses.KEY_UP and current_row > 0:
-                    current_row -= 1
-                elif key == curses.KEY_DOWN and current_row < max_row:
-                    current_row += 1
-                elif key == ord(' '):  # Spacebar to select/deselect
-                    if current_row in selected_indices:
-                        selected_indices.remove(current_row)
-                    else:
-                        selected_indices.add(current_row)
-                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter to continue
-                    break
-                elif key == ord('q') or key == ord('Q'):  # Quit
-                    return {}
-            
-            # Return selected fields
-            selected_fields = {}
-            for i in selected_indices:
-                if i < len(all_fields):
-                    field_name = all_fields[i]['name']
-                    selected_fields[field_name] = True
-            
-            return selected_fields
+        selected_stations = {'coops_module': [], 'ndbc_module': []}
         
         try:
-            return curses.wrapper(field_selection_screen)
+            # Page 1: CO-OPS stations
+            if coops_stations:
+                selected_coops = self._curses_station_page(coops_stations, "CO-OPS Tide Stations")
+                selected_stations['coops_module'] = selected_coops
+            
+            # Page 2: NDBC stations  
+            if ndbc_stations:
+                selected_ndbc = self._curses_station_page(ndbc_stations, "NDBC Marine Weather Buoys")
+                selected_stations['ndbc_module'] = selected_ndbc
+                
         except Exception as e:
-            print(f"{CORE_ICONS['warning']} Field selection error: {e}")
-            # Fallback to all fields
-            return {name: True for name in available_fields.keys()}
+            print(f"{CORE_ICONS['warning']} Error in station selection: {e}")
+            # Fallback to first stations if curses fails
+            selected_stations['coops_module'] = coops_stations[:2] if coops_stations else []
+            selected_stations['ndbc_module'] = ndbc_stations[:1] if ndbc_stations else []
+        
+        return selected_stations
 
     def _curses_station_page(self, stations, page_title):
         """
@@ -1058,7 +851,7 @@ class MarineDataConfigurator:
 
     def _interactive_field_selection_curses(self, available_fields):
         """
-        NEW METHOD: Curses interface for field selection organized by module
+        IMPROVED: Curses interface with proper spacing, headers, and scrolling
         """
         def field_selection_screen(stdscr):
             curses.curs_set(0)
@@ -1086,6 +879,7 @@ class MarineDataConfigurator:
             selected_indices = set(range(len(all_fields)))  # Start with all selected
             current_row = 0
             max_row = len(all_fields) - 1
+            scroll_offset = 0
             
             while True:
                 stdscr.clear()
@@ -1106,56 +900,148 @@ class MarineDataConfigurator:
                     if 2 + i < height - 1:
                         stdscr.addstr(2 + i, 0, instruction[:width-1])
                 
-                start_row = 5
+                # Calculate display area
+                start_display_row = 5
+                available_lines = height - start_display_row - 2  # Leave room for status
+                lines_per_field = 3  # Field line + description line + blank line
+                lines_per_section_header = 2  # Header line + separator line
                 
-                # CO-OPS section
+                # Calculate total display lines needed
+                total_lines_needed = 0
                 if coops_fields:
+                    total_lines_needed += lines_per_section_header + (len(coops_fields) * lines_per_field)
+                if ndbc_fields:
+                    total_lines_needed += lines_per_section_header + (len(ndbc_fields) * lines_per_field)
+                
+                # Calculate scrolling
+                max_scroll = max(0, total_lines_needed - available_lines)
+                
+                # Adjust scroll based on current field position
+                current_field_line = 0
+                if coops_fields:
+                    current_field_line += lines_per_section_header
+                    if current_row < len(coops_fields):
+                        current_field_line += current_row * lines_per_field
+                    else:
+                        current_field_line += len(coops_fields) * lines_per_field
+                        if ndbc_fields:
+                            current_field_line += lines_per_section_header
+                            current_field_line += (current_row - len(coops_fields)) * lines_per_field
+                
+                # Auto-scroll to keep current field visible
+                if current_field_line - scroll_offset >= available_lines - 3:
+                    scroll_offset = current_field_line - available_lines + 6
+                elif current_field_line < scroll_offset:
+                    scroll_offset = max(0, current_field_line - 3)
+                
+                scroll_offset = max(0, min(scroll_offset, max_scroll))
+                
+                # Display content with scrolling
+                display_row = start_display_row
+                current_line = 0
+                current_field_index = 0
+                
+                # CO-OPS Section
+                if coops_fields:
+                    # Section header
+                    if current_line >= scroll_offset and display_row < height - 2:
+                        try:
+                            stdscr.addstr(display_row, 0, "CO-OPS (Tides & Water Levels):", curses.A_BOLD)
+                            display_row += 1
+                            stdscr.addstr(display_row, 0, "─" * 30, curses.A_BOLD)
+                            display_row += 1
+                        except curses.error:
+                            pass
+                    current_line += lines_per_section_header
+                    
+                    # CO-OPS fields
+                    for field in coops_fields:
+                        if current_line >= scroll_offset and display_row < height - 2:
+                            # Selection indicator and field name
+                            checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
+                            field_line = f"  {checkbox} {field['display_name']}"
+                            
+                            # Highlight current row
+                            attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
+                            
+                            try:
+                                stdscr.addstr(display_row, 0, field_line[:width-1], attr)
+                                display_row += 1
+                                
+                                # Description line with arrow
+                                if field['description'] and display_row < height - 2:
+                                    desc_line = f"      → {field['description']}"
+                                    stdscr.addstr(display_row, 0, desc_line[:width-1], curses.A_DIM)
+                                    display_row += 1
+                                
+                                # Blank line for spacing
+                                if display_row < height - 2:
+                                    display_row += 1
+                                    
+                            except curses.error:
+                                break
+                        
+                        current_line += lines_per_field
+                        current_field_index += 1
+                
+                # NDBC Section
+                if ndbc_fields:
+                    # Section header
+                    if current_line >= scroll_offset and display_row < height - 2:
+                        try:
+                            stdscr.addstr(display_row, 0, "NDBC (Marine Weather):", curses.A_BOLD)
+                            display_row += 1
+                            stdscr.addstr(display_row, 0, "─" * 30, curses.A_BOLD)
+                            display_row += 1
+                        except curses.error:
+                            pass
+                    current_line += lines_per_section_header
+                    
+                    # NDBC fields
+                    for field in ndbc_fields:
+                        if current_line >= scroll_offset and display_row < height - 2:
+                            # Selection indicator and field name
+                            checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
+                            field_line = f"  {checkbox} {field['display_name']}"
+                            
+                            # Highlight current row
+                            attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
+                            
+                            try:
+                                stdscr.addstr(display_row, 0, field_line[:width-1], attr)
+                                display_row += 1
+                                
+                                # Description line with arrow
+                                if field['description'] and display_row < height - 2:
+                                    desc_line = f"      → {field['description']}"
+                                    stdscr.addstr(display_row, 0, desc_line[:width-1], curses.A_DIM)
+                                    display_row += 1
+                                
+                                # Blank line for spacing
+                                if display_row < height - 2:
+                                    display_row += 1
+                                    
+                            except curses.error:
+                                break
+                        
+                        current_line += lines_per_field
+                        current_field_index += 1
+                
+                # Scroll indicators
+                if scroll_offset > 0:
                     try:
-                        stdscr.addstr(start_row, 0, "CO-OPS (Tides & Water Levels):", curses.A_BOLD)
-                        start_row += 1
+                        stdscr.addstr(start_display_row - 1, width - 10, "↑ More ↑", curses.A_BOLD)
                     except curses.error:
                         pass
                 
-                current_field_index = 0
-                
-                # Display fields
-                for section_fields, section_name in [(coops_fields, "CO-OPS"), (ndbc_fields, "NDBC")]:
-                    if section_fields and section_name == "NDBC":
-                        try:
-                            if start_row + len(coops_fields) + 2 < height:
-                                stdscr.addstr(start_row + len(coops_fields) + 1, 0, "NDBC (Marine Weather):", curses.A_BOLD)
-                        except curses.error:
-                            pass
-                    
-                    for i, field in enumerate(section_fields):
-                        row_pos = start_row + current_field_index + (1 if section_name == "NDBC" and coops_fields else 0)
-                        
-                        if row_pos >= height - 2:
-                            break
-                        
-                        # Selection indicator
-                        checkbox = "[X]" if current_field_index in selected_indices else "[ ]"
-                        
-                        # Field info
-                        field_line = f"  {checkbox} {field['display_name']}"
-                        
-                        # Highlight current row
-                        attr = curses.A_REVERSE if current_field_index == current_row else curses.A_NORMAL
-                        
-                        try:
-                            stdscr.addstr(row_pos, 0, field_line[:width-1], attr)
-                            
-                            # Description on next line if space
-                            if row_pos + 1 < height - 2 and field['description']:
-                                desc_line = f"    {field['description']}"
-                                stdscr.addstr(row_pos + 1, 0, desc_line[:width-1], curses.A_DIM)
-                        except curses.error:
-                            pass
-                        
-                        current_field_index += 1
+                if scroll_offset < max_scroll:
+                    try:
+                        stdscr.addstr(height - 3, width - 10, "↓ More ↓", curses.A_BOLD)
+                    except curses.error:
+                        pass
                 
                 # Status line
-                status = f"Selected: {len(selected_indices)}/{len(all_fields)} fields | ENTER to continue"
+                status = f"Selected: {len(selected_indices)}/{len(all_fields)} fields | Field {current_row + 1}/{len(all_fields)} | ENTER to continue"
                 try:
                     stdscr.addstr(height-1, 0, status[:width-1], curses.A_BOLD)
                 except curses.error:
@@ -1170,12 +1056,12 @@ class MarineDataConfigurator:
                     current_row -= 1
                 elif key == curses.KEY_DOWN and current_row < max_row:
                     current_row += 1
-                elif key == ord(' '):  # Spacebar
+                elif key == ord(' '):  # Spacebar to select/deselect
                     if current_row in selected_indices:
                         selected_indices.remove(current_row)
                     else:
                         selected_indices.add(current_row)
-                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter
+                elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter to continue
                     break
                 elif key == ord('q') or key == ord('Q'):  # Quit
                     return {}
