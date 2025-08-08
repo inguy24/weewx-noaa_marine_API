@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Harbor Seal
+# Magic Animal: Great White Shark
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -339,146 +339,146 @@ class MarineDataConfigurator:
         print(f"{CORE_ICONS['status']} Configuration complete")
         return config_dict, selected_options
 
-    def _discover_coops_stations(self, latitude, longitude):
-            """
-            DEBUG VERSION: Add extensive logging to see what's happening
-            """
-            try:
-                print(f"DEBUG: Starting CO-OPS discovery for lat={latitude}, lon={longitude}")
-                
-                # Get API URLs from YAML configuration
-                api_modules = self.yaml_data.get('api_modules', {})
-                print(f"DEBUG: Found {len(api_modules)} API modules in YAML")
-                
-                coops_config = api_modules.get('coops_module', {})
-                print(f"DEBUG: CO-OPS config keys: {list(coops_config.keys())}")
-                
-                stations_url = coops_config.get('metadata_url', '')
-                products_url_template = coops_config.get('products_url', '')
-                
-                print(f"DEBUG: Stations URL: {stations_url}")
-                print(f"DEBUG: Products URL template: {products_url_template}")
-                
-                if not stations_url:
-                    print("DEBUG: No stations URL found in YAML!")
-                    return []
-                
-                # Get stations from API using YAML-configured URL
-                print("DEBUG: Making API call to stations URL...")
-                response = urllib.request.urlopen(stations_url, timeout=30)
-                raw_data = response.read().decode('utf-8')
-                print(f"DEBUG: Got response, data length: {len(raw_data)}")
-                
-                data = json.loads(raw_data)
-                print(f"DEBUG: JSON parsed successfully")
-                print(f"DEBUG: Top-level keys in response: {list(data.keys())}")
-                
-                # Process stations from actual API response
-                stations_list = data.get('stations', [])
-                print(f"DEBUG: Found {len(stations_list)} stations in API response")
-                
-                if len(stations_list) > 0:
-                    first_station = stations_list[0]
-                    print(f"DEBUG: First station keys: {list(first_station.keys())}")
-                    print(f"DEBUG: First station sample: {first_station}")
-                
-                all_stations = []
-                
-                for i, station_data in enumerate(stations_list):
-                    try:
-                        station_lat = float(station_data.get('lat', 0))
-                        station_lon = float(station_data.get('lng', 0))
-                        distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
-                        
-                        # Preserve all API data
-                        station_record = dict(station_data)
-                        station_record['distance'] = distance
-                        all_stations.append(station_record)
-                        
-                        if i < 5:  # Show first 5 for debugging
-                            print(f"DEBUG: Station {i}: {station_data.get('name')} at {distance:.1f} miles")
-                        
-                    except (ValueError, TypeError) as e:
-                        print(f"DEBUG: Skipped station {i}: {e}")
-                        continue
-                
-                print(f"DEBUG: Processed {len(all_stations)} valid stations")
-                
-                # Sort by distance and take top 15
-                all_stations.sort(key=lambda x: x['distance'])
-                closest_stations = all_stations[:15]
-                
-                print(f"DEBUG: Top 15 closest stations:")
-                for i, station in enumerate(closest_stations):
-                    print(f"  {i+1}. {station.get('name')} - {station.get('distance', 0):.1f} miles")
-                
-                # Get capabilities for ALL stations (no filtering based on capabilities)
-                final_stations = []
-                for i, station in enumerate(closest_stations):
-                    station_id = station.get('id')
-                    print(f"DEBUG: Getting capabilities for station {i+1}: {station_id}")
-                    
-                    if products_url_template and station_id:
-                        # Try capability detection with retry logic
-                        capabilities = []
-                        for attempt in range(2):  # Try twice
-                            try:
-                                products_url = products_url_template.format(station_id=station_id)
-                                print(f"DEBUG: Products URL attempt {attempt + 1}: {products_url}")
-                                
-                                products_response = urllib.request.urlopen(products_url, timeout=10)
-                                products_data = json.loads(products_response.read().decode('utf-8'))
-                                
-                                print(f"DEBUG: Products response keys: {list(products_data.keys())}")
-                                
-                                # Get capability mapping from YAML
-                                capability_mapping = coops_config.get('product_capability_mapping', {})
-                                print(f"DEBUG: Capability mapping has {len(capability_mapping)} entries")
-                                
-                                # Extract capabilities using YAML mapping
-                                products_list = products_data.get('products', [])
-                                print(f"DEBUG: Station has {len(products_list)} products")
-                                
-                                for product in products_list:
-                                    product_name = product.get('name', '')
-                                    print(f"DEBUG: Product: {product_name}")
-                                    
-                                    # Use YAML capability mapping
-                                    for capability, keywords in capability_mapping.items():
-                                        if any(keyword.lower() in product_name.lower() for keyword in keywords):
-                                            capabilities.append(capability)
-                                            print(f"DEBUG: Matched capability: {capability}")
-                                
-                                # Success - break out of retry loop
-                                break
-                                
-                            except Exception as e:
-                                print(f"DEBUG: Products API attempt {attempt + 1} failed for {station_id}: {e}")
-                                if attempt == 0:  # First attempt failed, wait and retry
-                                    print(f"DEBUG: Waiting 1 second before retry for station {station_id}")
-                                    time.sleep(1)
-                                else:  # Second attempt failed
-                                    print(f"DEBUG: Both attempts failed for station {station_id}")
-                                    capabilities = ['unknown']
-                        
-                        station['capabilities'] = list(set(capabilities)) if capabilities else ['unknown']
-                    else:
-                        print("DEBUG: No products URL template or station ID")
-                        station['capabilities'] = ['unknown']
-                    
-                    print(f"DEBUG: Final capabilities: {station['capabilities']}")
-                    
-                    # Always add station regardless of capabilities
-                    final_stations.append(station)
-                
-                print(f"DEBUG: Returning {len(final_stations)} stations (ALL within 15 closest)")
-                return final_stations
-                
-            except Exception as e:
-                print(f"DEBUG: MAJOR ERROR in station discovery: {e}")
-                import traceback
-                traceback.print_exc()
+    def _discover_coops_stations(self, latitude, longitude, radius_miles=50):
+        """
+        DATA-DRIVEN: Bounding box CO-OPS station discovery using YAML endpoints
+        
+        Finds ALL station types for comprehensive tide prediction coverage:
+        - Tide prediction stations (harmonic and subordinate)  
+        - Water level observation stations
+        - Current observation and prediction stations
+        """
+        try:
+            print(f"Discovering CO-OPS stations for lat={latitude}, lon={longitude}, radius={radius_miles} miles")
+            
+            # Get API URLs from YAML configuration (DATA-DRIVEN)
+            api_modules = self.yaml_data.get('api_modules', {})
+            coops_config = api_modules.get('coops_module', {})
+            
+            stations_url = coops_config.get('metadata_url', '')
+            products_url_template = coops_config.get('products_url', '')
+            
+            if not stations_url:
+                print(f"{CORE_ICONS['warning']} No CO-OPS metadata URL found in YAML")
                 return []
+            
+            # Calculate bounding box (BOUNDING BOX APPROACH like GClunies)
+            radius_degrees = radius_miles / 69.0  # Approximate: 1 degree ≈ 69 miles
+            lat_coords = [latitude - radius_degrees, latitude + radius_degrees]
+            lon_coords = [longitude - radius_degrees, longitude + radius_degrees]
+            
+            print(f"Using bounding box: lat {lat_coords}, lon {lon_coords}")
+            
+            # Discover ALL station types for comprehensive coverage
+            station_types = ['tidepredictions', 'waterlevels', 'currents']
+            all_discovered_stations = []
+            
+            for station_type in station_types:
+                try:
+                    # Build API call with type parameter (DATA-DRIVEN from YAML)
+                    params = {
+                        'type': station_type,
+                        'expand': 'details'
+                    }
+                    url_params = urllib.parse.urlencode(params)
+                    full_url = f"{stations_url}?{url_params}"
+                    
+                    print(f"Fetching {station_type} stations from API...")
+                    
+                    response = urllib.request.urlopen(full_url, timeout=30)
+                    data = json.loads(response.read().decode('utf-8'))
+                    
+                    stations_list = data.get('stations', [])
+                    print(f"Found {len(stations_list)} {station_type} stations")
+                    
+                    # Filter stations within bounding box (BOUNDING BOX FILTERING)
+                    for station_data in stations_list:
+                        try:
+                            station_lat = float(station_data.get('lat', 0))
+                            station_lon = float(station_data.get('lng', 0))
+                            
+                            # Check if station is within bounding box
+                            if (lat_coords[0] <= station_lat <= lat_coords[1] and 
+                                lon_coords[0] <= station_lon <= lon_coords[1]):
+                                
+                                # Calculate distance for sorting
+                                distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
+                                
+                                # Preserve all station data and add metadata
+                                station_record = dict(station_data)
+                                station_record['distance'] = distance
+                                station_record['station_type'] = station_type
+                                
+                                # Avoid duplicates (same station may appear in multiple types)
+                                station_id = station_record.get('id')
+                                if not any(s.get('id') == station_id for s in all_discovered_stations):
+                                    all_discovered_stations.append(station_record)
+                                
+                        except (ValueError, TypeError):
+                            continue
+                            
+                except Exception as e:
+                    print(f"{CORE_ICONS['warning']} Error fetching {station_type} stations: {e}")
+                    continue
+            
+            print(f"Found {len(all_discovered_stations)} unique stations within bounding box")
+            
+            # Sort by distance and take closest stations
+            all_discovered_stations.sort(key=lambda x: x['distance'])
+            closest_stations = all_discovered_stations[:15]
+            
+            print(f"Using {len(closest_stations)} closest stations")
+            for i, station in enumerate(closest_stations[:5]):
+                print(f"  {i+1}. {station.get('name')} - {station.get('distance', 0):.1f} miles ({station.get('station_type')})")
+            
+            # Get capabilities for each station (PRESERVE EXISTING CAPABILITY DETECTION)
+            final_stations = []
+            for station in closest_stations:
+                station_id = station.get('id')
+                
+                if products_url_template and station_id:
+                    # Use existing capability detection with retry logic
+                    capabilities = []
+                    for attempt in range(2):
+                        try:
+                            products_url = products_url_template.format(station_id=station_id)
+                            products_response = urllib.request.urlopen(products_url, timeout=10)
+                            products_data = json.loads(products_response.read().decode('utf-8'))
+                            
+                            # Get capability mapping from YAML (DATA-DRIVEN)
+                            capability_mapping = coops_config.get('product_capability_mapping', {})
+                            
+                            # Extract capabilities using YAML mapping
+                            products_list = products_data.get('products', [])
+                            
+                            for product in products_list:
+                                product_name = product.get('name', '')
+                                
+                                # Use YAML capability mapping
+                                for capability, keywords in capability_mapping.items():
+                                    if any(keyword.lower() in product_name.lower() for keyword in keywords):
+                                        capabilities.append(capability)
+                            
+                            break  # Success
+                            
+                        except Exception as e:
+                            if attempt == 0:
+                                time.sleep(1)  # Wait and retry
+                            else:
+                                capabilities = ['tide_predictions']  # Default for all station types
+                    
+                    station['capabilities'] = list(set(capabilities)) if capabilities else ['tide_predictions']
+                else:
+                    station['capabilities'] = ['tide_predictions']  # Default capability
+                
+                final_stations.append(station)
+            
+            print(f"Returning {len(final_stations)} stations with capabilities")
+            return final_stations
+            
+        except Exception as e:
+            print(f"{CORE_ICONS['warning']} Error in CO-OPS station discovery: {e}")
+            return []
    
     def _discover_ndbc_stations(self, latitude, longitude):
         """
