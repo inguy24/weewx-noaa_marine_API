@@ -548,7 +548,7 @@ class MarineDataConfigurator:
             # Sort by distance and return closest stations
             nearby_stations.sort(key=lambda x: x['distance'])
             log.debug(f"Found {len(nearby_stations)} NDBC stations within 100 miles")
-            return nearby_stations[:10]
+            return nearby_stations[:15]
             
         except Exception as e:
             log.error(f"Error discovering NDBC stations: {e}")
