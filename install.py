@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Snail
+# Magic Animal: Starfish
 """
 WeeWX Marine Data Extension Installer
 
@@ -860,17 +860,24 @@ class MarineDataConfigurator:
         return capabilities
 
     def _enhance_ndbc_stations_with_capabilities(self, stations):
-        """
-        NEW METHOD: Add capability detection to NDBC stations
-        """
+        """Replace generic capability assignment with actual data content testing."""
         enhanced_stations = []
         
         for station in stations:
             enhanced_station = station.copy()
+            station_id = station.get('id', '')
             
-            # NDBC stations typically have standard capabilities
-            capabilities = ['wave_data', 'wind_data', 'sea_surface_temperature', 'barometric_pressure']
-            enhanced_station['capabilities'] = capabilities
+            if station_id:
+                # Test actual data content
+                capabilities = self._test_ndbc_station_real_data(station_id)
+                
+                if capabilities:
+                    enhanced_station['capabilities'] = capabilities
+                else:
+                    # Fallback: Basic station capability if no data available
+                    enhanced_station['capabilities'] = ['Basic Station Data']
+            else:
+                enhanced_station['capabilities'] = ['Basic Station Data']
             
             enhanced_stations.append(enhanced_station)
         
@@ -1110,42 +1117,58 @@ class MarineDataConfigurator:
             return {name: True for name in available_fields.keys()}
 
     def _discover_and_select_stations(self):
-        """
-        MODIFIED: Add animated spinner, move location print to run_interactive_setup
-        """
-        # REMOVED: Location print (moved to run_interactive_setup)
-        station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
-        latitude = float(station_config.get('latitude'))
-        longitude = float(station_config.get('longitude'))
-        # REMOVED: location_name and print (moved up)
+        """Discover stations near user location and test their real capabilities."""
+        try:
+            # Get user location from WeeWX configuration
+            station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
+            latitude = station_config.get('latitude')
+            longitude = station_config.get('longitude')
+            
+            # Simple check - if WeeWX is running, location should be available
+            if latitude is None or longitude is None:
+                log.error("Cannot get location from WeeWX configuration")
+                return False
+            
+            latitude = float(latitude)
+            longitude = float(longitude)
+            
+            self.user_latitude = latitude
+            self.user_longitude = longitude
 
-        self.user_latitude = latitude
-        self.user_longitude = longitude
-
-        # UPDATED: Discover stations with animated spinner
-        progress = InstallationProgressManager()
-        
-        progress.start_spinner("Discovering CO-OPS stations")
-        coops_stations = self._discover_coops_stations(latitude, longitude)
-        enhanced_coops = self._enhance_coops_stations_with_capabilities(coops_stations)
-        # Check for failure
-        if not enhanced_coops:
-            progress.stop_spinner("Discovering CO-OPS stations", success=False, error_msg="No stations found")
-        else:
-            progress.stop_spinner("Discovering CO-OPS stations", success=True)
-        
-        progress.start_spinner("Discovering NDBC stations")
-        ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
-        enhanced_ndbc = self._enhance_ndbc_stations_with_capabilities(ndbc_stations)
-        # Check for failure
-        if not enhanced_ndbc:
-            progress.stop_spinner("Discovering NDBC stations", success=False, error_msg="No stations found")
-        else:
-            progress.stop_spinner("Discovering NDBC stations", success=True)
-        
-        # NEW: Use curses interface for selection
-        selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
-        self.selected_stations = selected_stations
+            # Initialize progress manager
+            progress = InstallationProgressManager()
+            
+            # Discover CO-OPS stations with progress
+            progress.start_spinner("Discovering CO-OPS stations")
+            coops_stations = self._discover_coops_stations(latitude, longitude)
+            enhanced_coops = self._enhance_coops_stations_with_capabilities(coops_stations)
+            if not enhanced_coops:
+                progress.stop_spinner("Discovering CO-OPS stations", success=False, error_msg="No stations found")
+            else:
+                progress.stop_spinner("Discovering CO-OPS stations", success=True)
+            
+            # Discover NDBC stations with progress
+            progress.start_spinner("Discovering NDBC stations")
+            ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
+            progress.stop_spinner("Discovering NDBC stations", success=bool(ndbc_stations))
+            
+            # Real capability detection with progress
+            if ndbc_stations:
+                progress.start_spinner("Testing NDBC station capabilities")
+                enhanced_ndbc = self._enhance_ndbc_stations_with_capabilities(ndbc_stations)
+                progress.stop_spinner("Testing NDBC station capabilities", success=True)
+            else:
+                enhanced_ndbc = []
+            
+            # Continue with interactive selection
+            selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
+            self.selected_stations = selected_stations
+            
+            return True
+            
+        except Exception as e:
+            log.error(f"Error in station discovery: {e}")
+            return False
 
     def _select_fields_from_yaml(self):
         """
@@ -1256,6 +1279,78 @@ class MarineDataConfigurator:
         
         return config
 
+    def _test_ndbc_station_real_data(self, station_id):
+        """Test actual data content from station's .txt file to determine capabilities."""
+        try:
+            # Get NDBC configuration from YAML
+            api_modules = self.yaml_data.get('api_modules', {})
+            ndbc_config = api_modules.get('ndbc_module', {})
+            
+            # Build URL from YAML station_pattern
+            station_pattern = ndbc_config.get('station_pattern', '')
+            if not station_pattern:
+                return []
+                
+            url = station_pattern.format(station_id=station_id)
+            timeout = ndbc_config.get('timeout', 10)
+            
+            # Download same file that marine_data.py will parse
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                content = response.read().decode('utf-8')
+            
+            # Parse same way as marine_data.py
+            lines = content.strip().split('\n')
+            if len(lines) < 3:
+                return []
+            
+            headers = lines[0].split()  # Field names
+            data_line = lines[2].split()  # Most recent data values
+            
+            # Build field-to-data mapping from .txt file
+            available_data = {}
+            for i, header in enumerate(headers):
+                if i < len(data_line):
+                    value = data_line[i]
+                    available_data[header] = value
+            
+            # Group fields by natural sensor type (from .txt file field names)
+            sensor_groups = {
+                'Atmospheric Data': ['WDIR', 'WSPD', 'GST', 'PRES', 'ATMP', 'DEWP', 'VIS'],
+                'Wave Data': ['WVHT', 'DPD', 'APD', 'MWD'], 
+                'Ocean Temperature': ['WTMP']
+            }
+            
+            # Test each sensor group for actual data (not "MM", "999.0", "99.0")
+            available_capabilities = []
+            missing_indicators = ['MM', '999.0', '99.0', 'MM.']
+            
+            for capability, field_list in sensor_groups.items():
+                has_real_data = False
+                
+                for field in field_list:
+                    if field in available_data:
+                        value = available_data[field]
+                        if value not in missing_indicators:
+                            try:
+                                # Additional check - valid numeric data
+                                float_val = float(value)
+                                if float_val not in [999.0, 99.0, -999.0]:
+                                    has_real_data = True
+                                    break
+                            except ValueError:
+                                # Non-numeric but not missing indicator
+                                if value not in missing_indicators:
+                                    has_real_data = True
+                                    break
+                
+                if has_real_data:
+                    available_capabilities.append(capability)
+            
+            return available_capabilities
+            
+        except Exception as e:
+            log.debug(f"Station {station_id}: Error testing capabilities: {e}")
+            return []
 
 class COOPSAPIClient:
     """
