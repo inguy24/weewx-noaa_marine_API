@@ -1132,27 +1132,31 @@ class COOPSBackgroundThread(threading.Thread):
                 time.sleep(300)  # Wait 5 minutes on error
 
     def _collect_water_level_data(self):
-        """FUNCTIONAL: Collect real-time water level data"""
+        """FUNCTIONAL: Collect real-time water level data with graceful handling of missing data"""
         for station_id in self.stations:
             try:
-                # Get current water level
+                # Get current water level - may return None for stations without this capability
                 data = self.api_client.get_water_level(station_id)
-                if data:
+                if data:  # Only insert if we got actual data
                     self._insert_coops_data(station_id, data)
+                else:
+                    log.debug(f"Station {station_id} does not provide water level data")
                     
-                # Get water temperature if available
+                # Get water temperature if available - may return None
                 temp_data = self.api_client.get_water_temperature(station_id)
-                if temp_data:
+                if temp_data:  # Only insert if we got actual data
                     self._insert_coops_data(station_id, temp_data)
+                else:
+                    log.debug(f"Station {station_id} does not provide water temperature data")
                     
             except Exception as e:
                 log.error(f"Error collecting water level for station {station_id}: {e}")
 
     def _collect_tide_predictions(self):
-        """FUNCTIONAL: Collect 7-day tide predictions"""
+        """FUNCTIONAL: Collect 7-day tide predictions with graceful handling of missing data"""
         for station_id in self.stations:
             try:
-                # Get 7 days of predictions
+                # Get 7 days of predictions - may return None for stations without this capability
                 end_date = datetime.now() + timedelta(days=7)
                 data = self.api_client.get_predictions(
                     station_id,
@@ -1162,6 +1166,8 @@ class COOPSBackgroundThread(threading.Thread):
                 
                 if data and 'predictions' in data:
                     self._insert_tide_predictions(station_id, data)
+                else:
+                    log.debug(f"Station {station_id} does not provide tide prediction data")
                     
             except Exception as e:
                 log.error(f"Error collecting predictions for station {station_id}: {e}")
@@ -1444,7 +1450,7 @@ class COOPSAPIClient:
         return self._make_api_request(params)
 
     def _make_api_request(self, params):
-        """FUNCTIONAL: Make HTTP request with retries"""
+        """FUNCTIONAL: Make HTTP request with retries and handle missing data gracefully"""
         url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
         
         for attempt in range(self.retry_attempts):
@@ -1454,6 +1460,14 @@ class COOPSAPIClient:
                     
                     # Check for API errors
                     if 'error' in data:
+                        error_msg = data['error'].get('message', str(data['error']))
+                        
+                        # Handle "No data found" gracefully - this is normal for some stations
+                        if 'No data was found' in error_msg or 'not be offered at this station' in error_msg:
+                            log.debug(f"CO-OPS station does not provide this data type: {error_msg}")
+                            return None  # Return None instead of raising exception
+                        
+                        # Other errors are still actual problems
                         raise MarineDataAPIError(f"CO-OPS API error: {data['error']}")
                     
                     return data
