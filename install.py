@@ -509,7 +509,7 @@ class MarineDataConfigurator:
    
     def _discover_ndbc_stations(self, latitude, longitude):
         """
-        Discover NDBC stations within range, filtering out only C-MAN coastal stations
+        Discover NDBC stations within range, filtering by actual data capabilities
         """
         try:
             # Get NDBC metadata URL from YAML configuration
@@ -530,29 +530,28 @@ class MarineDataConfigurator:
                     station_name = station.get('name', f'NDBC {station_id}')
                     station_lat = float(station.get('lat', 0))
                     station_lon = float(station.get('lon', 0))
-                    station_owner = station.get('owner', '')
                     
-                    # Filter out problematic C-MAN coastal stations (not true NDBC buoys)
-                    # Keep stations unless they have obvious C-MAN indicators
-                    if (station_owner in ['NOS', 'USCG'] or 
-                        any(cman_indicator in station_name.upper() for cman_indicator in 
-                            ['PIER', 'BRIDGE', 'HARBOR', 'PORT', 'WHARF', 'DOCK'])):
-                        continue
-                    
-                    # Calculate distance
+                    # Calculate distance first
                     distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
                     
                     if distance <= 100:  # Use same distance limit as CO-OPS method
-                        # Calculate cardinal bearing
-                        bearing = self._calculate_bearing(latitude, longitude, station_lat, station_lon)
-                        cardinal = self._bearing_to_16_point_cardinal(bearing)
+                        # Test if station has useful capabilities we want
+                        capabilities = self._test_ndbc_station_real_data(station_id)
                         
-                        nearby_stations.append({
-                            'id': station_id,
-                            'name': station_name,
-                            'distance': distance,
-                            'cardinal': cardinal
-                        })
+                        # Only include stations that have capabilities we're looking for
+                        useful_capabilities = ['Atmospheric Data', 'Wave Data', 'Ocean Temperature']
+                        if any(cap in capabilities for cap in useful_capabilities):
+                            # Calculate cardinal bearing
+                            bearing = self._calculate_bearing(latitude, longitude, station_lat, station_lon)
+                            cardinal = self._bearing_to_16_point_cardinal(bearing)
+                            
+                            nearby_stations.append({
+                                'id': station_id,
+                                'name': station_name,
+                                'distance': distance,
+                                'cardinal': cardinal,
+                                'capabilities': capabilities
+                            })
                         
                 except (ValueError, TypeError, AttributeError):
                     continue
@@ -565,7 +564,7 @@ class MarineDataConfigurator:
         except Exception as e:
             log.error(f"Error discovering NDBC stations: {e}")
             return []
-
+    
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """
         PRESERVE: Existing distance calculation using Haversine formula
@@ -885,32 +884,6 @@ class MarineDataConfigurator:
         
         return capabilities
 
-    def _enhance_ndbc_stations_with_capabilities(self, stations):
-        """
-        Add capabilities to NDBC stations (cardinal bearings already added in discovery)
-        """
-        enhanced_stations = []
-        
-        for station in stations:
-            enhanced_station = station.copy()
-            station_id = station.get('id', '')
-            
-            if station_id:
-                # Test actual data content
-                capabilities = self._test_ndbc_station_real_data(station_id)
-                
-                if capabilities:
-                    enhanced_station['capabilities'] = capabilities
-                else:
-                    # Fallback: Basic station capability if no data available
-                    enhanced_station['capabilities'] = ['Basic Station Data']
-            else:
-                enhanced_station['capabilities'] = ['Basic Station Data']
-            
-            enhanced_stations.append(enhanced_station)
-        
-        return enhanced_stations
-
     def _interactive_field_selection_curses(self, available_fields):
         """
         IMPROVED: Curses interface with proper spacing, headers, and scrolling
@@ -1145,7 +1118,9 @@ class MarineDataConfigurator:
             return {name: True for name in available_fields.keys()}
 
     def _discover_and_select_stations(self):
-        """Discover stations near user location and test their real capabilities."""
+        """
+        Discover and select stations with progress indicators
+        """
         try:
             # Get user location from WeeWX configuration
             station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
@@ -1175,18 +1150,10 @@ class MarineDataConfigurator:
             else:
                 progress.stop_spinner("Discovering CO-OPS stations", success=True)
             
-            # Discover NDBC stations with progress
+            # Discover NDBC stations with progress (now includes capability testing and enhancement)
             progress.start_spinner("Discovering NDBC stations")
-            ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
-            progress.stop_spinner("Discovering NDBC stations", success=bool(ndbc_stations))
-            
-            # Real capability detection with progress
-            if ndbc_stations:
-                progress.start_spinner("Testing NDBC station capabilities")
-                enhanced_ndbc = self._enhance_ndbc_stations_with_capabilities(ndbc_stations)
-                progress.stop_spinner("Testing NDBC station capabilities", success=True)
-            else:
-                enhanced_ndbc = []
+            enhanced_ndbc = self._discover_ndbc_stations(latitude, longitude)
+            progress.stop_spinner("Discovering NDBC stations", success=bool(enhanced_ndbc))
             
             # Continue with interactive selection
             selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
@@ -1197,7 +1164,7 @@ class MarineDataConfigurator:
         except Exception as e:
             log.error(f"Error in station discovery: {e}")
             return False
-
+    
     def _select_fields_from_yaml(self):
         """
         MODIFIED: Add curses interface call to existing method
