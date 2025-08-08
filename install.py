@@ -159,9 +159,6 @@ class MarineDataInstaller(ExtensionInstaller):
                     elif table_name == 'ndbc_data':
                         self._create_ndbc_data_table(manager)
                 
-                # Create performance indexes
-                self._create_performance_indexes(manager)
-                
             print(f"{CORE_ICONS['status']} Marine tables created successfully")
             
         except Exception as e:
