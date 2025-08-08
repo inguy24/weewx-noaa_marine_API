@@ -217,7 +217,7 @@ class MarineDataInstaller(ExtensionInstaller):
                 predicted_height REAL,
                 datum TEXT,
                 days_ahead INTEGER,
-                PRIMARY KEY (station_id(20), tide_time, tide_type)
+                PRIMARY KEY (station_id(20), tide_time, tide_type(1))
             )
         """)
 
