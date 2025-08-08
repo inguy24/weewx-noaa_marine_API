@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Rooster
+# Secret Animal: Pig
 """
 WeeWX Marine Data Extension - FUNCTIONAL Core Service
 
@@ -1532,35 +1532,242 @@ class NDBCAPIClient:
 
 class TideTableSearchList(SearchList):
     """
-    FUNCTIONAL: WeeWX Search List Extension for tide table access
+    FIXED: WeeWX Search List Extension for tide table access
+    
+    CORRECTIONS:
+    - Uses db_lookup parameter per WeeWX 5.1 documentation
+    - Uses timespan parameter for time-bounded queries
+    - Implements missing helper methods
+    - Respects 7-day maximum while allowing flexible ranges
     """
     
     def __init__(self, generator):
-        """ITEM 1: Proper SearchList inheritance for WeeWX integration"""
+        """WeeWX 5.1 compliant SearchList inheritance"""
         SearchList.__init__(self, generator)
-        self.config_dict = generator.config_dict
         
     def get_extension_list(self, timespan, db_lookup):
-        """Provide tide table data for WeeWX templates"""
+        """
+        FIXED: Provide tide table data for WeeWX templates
+        
+        CORRECTIONS:
+        - Now uses both timespan and db_lookup parameters
+        - Follows WeeWX 5.1 documentation patterns
+        - Calculates time range from timespan with 7-day maximum
+        """
         search_list = {}
         
         try:
-            # Get database manager
-            db_manager = self.generator.db_binder.get_manager('wx_binding')
+            # FIXED: Use db_lookup parameter per WeeWX 5.1 documentation
+            db_manager = db_lookup('wx_binding')
             
-            # Get tide information
-            search_list['next_high_tide'] = self._get_next_tide(db_manager, 'H')
-            search_list['next_low_tide'] = self._get_next_tide(db_manager, 'L')
-            search_list['today_tides'] = self._get_today_tides(db_manager)
-            search_list['week_tides'] = self._get_week_tides(db_manager)
+            # FIXED: Calculate query time range from timespan parameter
+            current_time = int(time.time())
+            
+            # Use timespan.stop as end time, but don't exceed current time
+            end_time = min(timespan.stop, current_time)
+            
+            # Calculate start time from timespan, but respect 7-day maximum
+            requested_duration = timespan.stop - timespan.start
+            max_duration = 7 * 86400  # 7 days in seconds
+            
+            if requested_duration > max_duration:
+                # Limit to 7 days maximum
+                start_time = end_time - max_duration
+                log.debug(f"Tide query limited to 7 days (requested {requested_duration/86400:.1f} days)")
+            else:
+                # Use requested timespan
+                start_time = max(timespan.start, current_time)  # Don't go into past beyond current time
+            
+            # Get tide information using calculated time range
+            search_list['next_high_tide'] = self._get_next_tide(db_manager, 'H', current_time, end_time)
+            search_list['next_low_tide'] = self._get_next_tide(db_manager, 'L', current_time, end_time)
+            search_list['today_tides'] = self._get_today_tides(db_manager, current_time)
+            search_list['week_tides'] = self._get_week_tides(db_manager, start_time, end_time)
+            search_list['tide_range_today'] = self._get_tide_range_today(db_manager, current_time)
+            
+            log.debug(f"TideTableSearchList: Generated tide data for {(end_time-start_time)/86400:.1f} day range")
             
         except Exception as e:
             log.error(f"Error in TideTableSearchList: {e}")
+            # Return empty dict on error rather than failing template generation
+            search_list = {
+                'next_high_tide': None,
+                'next_low_tide': None,
+                'today_tides': [],
+                'week_tides': {},
+                'tide_range_today': None
+            }
             
         # Return proper format for WeeWX SearchList
         return [search_list]
 
-    def _get_next_tide(self, db_manager, tide_type):
+    def _get_next_tide(self, db_manager, tide_type, start_time, end_time):
+        """
+        IMPLEMENTED: Get next high or low tide within timespan
+        
+        Args:
+            db_manager: Database manager from db_lookup
+            tide_type: 'H' for high, 'L' for low
+            start_time: Start of search range (Unix timestamp)
+            end_time: End of search range (Unix timestamp)
+        """
+        try:
+            sql = """
+                SELECT tide_time, predicted_height, station_id, datum
+                FROM tide_table 
+                WHERE tide_type = ? AND tide_time >= ? AND tide_time <= ?
+                ORDER BY tide_time LIMIT 1
+            """
+            
+            result = db_manager.connection.execute(sql, (tide_type, start_time, end_time))
+            row = result.fetchone()
+            
+            if row:
+                tide_time = row[0]
+                return {
+                    'time': tide_time,
+                    'height': row[1],
+                    'station_id': row[2],
+                    'datum': row[3],
+                    'formatted_time': datetime.fromtimestamp(tide_time).strftime('%I:%M %p'),
+                    'formatted_height': f"{row[1]:.1f} ft {row[3]}",
+                    'formatted_date': datetime.fromtimestamp(tide_time).strftime('%A, %B %d'),
+                    'type': 'High' if tide_type == 'H' else 'Low'
+                }
+
+        except Exception as e:
+            log.error(f"Error getting next {tide_type} tide: {e}")
+        return None
+
+    def _get_today_tides(self, db_manager, current_time):
+        """
+        IMPLEMENTED: Get all tides for today
+        
+        Args:
+            db_manager: Database manager from db_lookup
+            current_time: Current time (Unix timestamp)
+        """
+        try:
+            # Calculate today's date boundaries
+            today_date = datetime.fromtimestamp(current_time).date()
+            today_start = int(datetime.combine(today_date, datetime.min.time()).timestamp())
+            today_end = today_start + 86400  # 24 hours later
+            
+            sql = """
+                SELECT tide_time, tide_type, predicted_height, station_id, datum
+                FROM tide_table 
+                WHERE tide_time >= ? AND tide_time < ?
+                ORDER BY tide_time
+            """
+            
+            result = db_manager.connection.execute(sql, (today_start, today_end))
+            tides = []
+            
+            for row in result.fetchall():
+                tide_time = row[0]
+                tides.append({
+                    'time': tide_time,
+                    'type': 'High' if row[1] == 'H' else 'Low',
+                    'height': row[2],
+                    'station_id': row[3],
+                    'datum': row[4],
+                    'formatted_time': datetime.fromtimestamp(tide_time).strftime('%I:%M %p'),
+                    'formatted_height': f"{row[2]:.1f} ft {row[4]}",
+                    'is_past': tide_time < current_time
+                })
+            
+            return tides
+            
+        except Exception as e:
+            log.error(f"Error getting today's tides: {e}")
+        return []
+
+    def _get_week_tides(self, db_manager, start_time, end_time):
+        """
+        IMPLEMENTED: Get tides for time range organized by day
+        
+        Args:
+            db_manager: Database manager from db_lookup
+            start_time: Start of range (Unix timestamp)
+            end_time: End of range (Unix timestamp)
+        """
+        try:
+            sql = """
+                SELECT tide_time, tide_type, predicted_height, station_id, datum, days_ahead
+                FROM tide_table 
+                WHERE tide_time >= ? AND tide_time <= ?
+                ORDER BY tide_time
+            """
+            
+            result = db_manager.connection.execute(sql, (start_time, end_time))
+            week_tides = {}
+            
+            for row in result.fetchall():
+                tide_time = row[0]
+                tide_datetime = datetime.fromtimestamp(tide_time)
+                date_key = tide_datetime.strftime('%Y-%m-%d')
+                
+                if date_key not in week_tides:
+                    week_tides[date_key] = {
+                        'date': tide_datetime.strftime('%A, %B %d'),
+                        'date_short': tide_datetime.strftime('%m/%d'),
+                        'is_today': tide_datetime.date() == datetime.now().date(),
+                        'tides': []
+                    }
+                
+                week_tides[date_key]['tides'].append({
+                    'time': tide_time,
+                    'type': 'High' if row[1] == 'H' else 'Low',
+                    'height': row[2],
+                    'station_id': row[3],
+                    'datum': row[4],
+                    'days_ahead': row[5],
+                    'formatted_time': tide_datetime.strftime('%I:%M %p'),
+                    'formatted_height': f"{row[2]:.1f} ft {row[4]}",
+                    'is_past': tide_time < time.time()
+                })
+            
+            return week_tides
+            
+        except Exception as e:
+            log.error(f"Error getting week tides: {e}")
+        return {}
+
+    def _get_tide_range_today(self, db_manager, current_time):
+        """
+        IMPLEMENTED: Get today's tide range (high - low)
+        
+        Args:
+            db_manager: Database manager from db_lookup
+            current_time: Current time (Unix timestamp)
+        """
+        try:
+            today_tides = self._get_today_tides(db_manager, current_time)
+            
+            if not today_tides:
+                return None
+                
+            highs = [t['height'] for t in today_tides if t['type'] == 'High']
+            lows = [t['height'] for t in today_tides if t['type'] == 'Low']
+            
+            if highs and lows:
+                high_value = max(highs)
+                low_value = min(lows)
+                tide_range = high_value - low_value
+                
+                return {
+                    'range': tide_range,
+                    'high': high_value,
+                    'low': low_value,
+                    'formatted_range': f"{tide_range:.1f} ft range",
+                    'formatted_high': f"{high_value:.1f} ft",
+                    'formatted_low': f"{low_value:.1f} ft",
+                    'tide_count': len(today_tides)
+                }
+            
+        except Exception as e:
+            log.error(f"Error calculating tide range: {e}")
+        return None
         """Get next high or low tide"""
         try:
             current_time = int(time.time())
