@@ -307,7 +307,7 @@ api_modules:
     display_name: "NOAA CO-OPS (Tides & Currents)"
     description: "Real-time water levels, tide predictions, coastal water temperature"
     api_url: "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
-    metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?expand=detail"
+    metadata_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json"
     station_info_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}.json"
     products_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}/products.json"
     datums_url: "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/{station_id}/datums.json"
