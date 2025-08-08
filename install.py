@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Starfish
+# Magic Animal: Seahorse
 """
 WeeWX Marine Data Extension Installer
 
@@ -509,8 +509,7 @@ class MarineDataConfigurator:
    
     def _discover_ndbc_stations(self, latitude, longitude):
         """
-        PRESERVE: Existing NDBC station discovery patterns
-        SURGICAL CHANGE: Move verbose output to debug logging
+        Discover NDBC stations within range, filtering out C-MAN and NOS stations
         """
         try:
             # Get NDBC metadata URL from YAML configuration
@@ -531,15 +530,25 @@ class MarineDataConfigurator:
                     station_name = station.get('name', f'NDBC {station_id}')
                     station_lat = float(station.get('lat', 0))
                     station_lon = float(station.get('lon', 0))
+                    station_owner = station.get('owner', '')
+                    
+                    # Filter to include only true NDBC stations
+                    if station_owner != 'NDBC':
+                        continue
                     
                     # Calculate distance
                     distance = self._calculate_distance(latitude, longitude, station_lat, station_lon)
                     
                     if distance <= 100:  # Use same distance limit as CO-OPS method
+                        # Calculate cardinal bearing
+                        bearing = self._calculate_bearing(latitude, longitude, station_lat, station_lon)
+                        cardinal = self._bearing_to_16_point_cardinal(bearing)
+                        
                         nearby_stations.append({
                             'id': station_id,
                             'name': station_name,
-                            'distance': distance
+                            'distance': distance,
+                            'cardinal': cardinal
                         })
                         
                 except (ValueError, TypeError, AttributeError):
@@ -552,6 +561,7 @@ class MarineDataConfigurator:
             
         except Exception as e:
             log.error(f"Error discovering NDBC stations: {e}")
+            return []
 
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """
@@ -805,14 +815,21 @@ class MarineDataConfigurator:
 
     def _enhance_coops_stations_with_capabilities(self, stations):
         """
-        NEW METHOD: Add capability detection to CO-OPS stations
+        Add capabilities to CO-OPS stations and include cardinal bearings
         """
         enhanced_stations = []
         
         for station in stations:
             enhanced_station = station.copy()
             
-            # Get station capabilities from NOAA API
+            # Calculate cardinal bearing for CO-OPS stations
+            station_lat = float(station.get('lat', 0))
+            station_lon = float(station.get('lng', 0))
+            bearing = self._calculate_bearing(self.user_latitude, self.user_longitude, station_lat, station_lon)
+            cardinal = self._bearing_to_16_point_cardinal(bearing)
+            enhanced_station['cardinal'] = cardinal
+            
+            # Get station capabilities from existing method (preserve existing logic)
             capabilities = self._get_coops_station_capabilities(station['id'])
             enhanced_station['capabilities'] = capabilities
             
@@ -860,7 +877,9 @@ class MarineDataConfigurator:
         return capabilities
 
     def _enhance_ndbc_stations_with_capabilities(self, stations):
-        """Replace generic capability assignment with actual data content testing."""
+        """
+        Add capabilities to NDBC stations (cardinal bearings already added in discovery)
+        """
         enhanced_stations = []
         
         for station in stations:
@@ -1351,6 +1370,38 @@ class MarineDataConfigurator:
         except Exception as e:
             log.debug(f"Station {station_id}: Error testing capabilities: {e}")
             return []
+
+    def _calculate_bearing(self, lat1, lon1, lat2, lon2):
+        """
+        Calculate true bearing from point 1 to point 2 in degrees
+        """
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        dlon_rad = math.radians(lon2 - lon1)
+        
+        y = math.sin(dlon_rad) * math.cos(lat2_rad)
+        x = (math.cos(lat1_rad) * math.sin(lat2_rad) - 
+            math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon_rad))
+        
+        bearing_rad = math.atan2(y, x)
+        bearing_deg = math.degrees(bearing_rad)
+        
+        # Normalize to 0-360 degrees
+        return (bearing_deg + 360) % 360
+
+    def _bearing_to_16_point_cardinal(self, bearing):
+        """
+        Convert bearing in degrees to 16-point cardinal direction
+        """
+        directions = [
+            'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+            'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'
+        ]
+        
+        # Each direction covers 22.5 degrees
+        index = round(bearing / 22.5) % 16
+        return directions[index]
+
 
 class COOPSAPIClient:
     """
