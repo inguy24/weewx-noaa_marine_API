@@ -198,7 +198,7 @@ class MarineDataInstaller(ExtensionInstaller):
                 marine_water_level_flags TEXT,
                 marine_coastal_water_temp REAL,
                 marine_water_temp_flags TEXT,
-                PRIMARY KEY (dateTime, station_id)
+                PRIMARY KEY (dateTime, station_id(20))
             )
         """)
 
@@ -217,7 +217,7 @@ class MarineDataInstaller(ExtensionInstaller):
                 predicted_height REAL,
                 datum TEXT,
                 days_ahead INTEGER,
-                PRIMARY KEY (station_id, tide_time, tide_type)
+                PRIMARY KEY (station_id(20), tide_time, tide_type)
             )
         """)
 
@@ -238,15 +238,15 @@ class MarineDataInstaller(ExtensionInstaller):
                 marine_barometric_pressure REAL,
                 marine_visibility REAL,
                 marine_dewpoint REAL,
-                PRIMARY KEY (dateTime, station_id)
+                PRIMARY KEY (dateTime, station_id(20))
             )
         """)
 
     def _create_performance_indexes(self, manager):
         """Create indexes for query performance"""
-        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_upcoming_tides ON tide_table(station_id, tide_time)")
-        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_recent_coops ON coops_realtime(station_id, dateTime)")
-        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_recent_ndbc ON ndbc_data(station_id, dateTime)")
+        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_upcoming_tides ON tide_table(station_id(20), tide_time)")
+        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_recent_coops ON coops_realtime(station_id(20), dateTime)")
+        manager.connection.execute("CREATE INDEX IF NOT EXISTS idx_recent_ndbc ON ndbc_data(station_id(20), dateTime)")
 
 
 class MarineDataConfigurator:
