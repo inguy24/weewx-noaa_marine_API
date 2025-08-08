@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Sheep
+# Secret Animal: Chicken
 """
 WeeWX Marine Data Extension - FUNCTIONAL Core Service
 
@@ -290,6 +290,49 @@ class MarineDataService(StdService):
         log.info("Configuration validation passed")
         return True
 
+    def _start_background_threads(self):
+        """Start background data collection threads with WeeWX manager"""
+        
+        # Start CO-OPS thread if stations configured
+        coops_stations = self.selected_stations.get('coops_module', [])
+        if coops_stations:
+            coops_fields = self.field_mappings.get('coops_module', {})
+            self.coops_thread = COOPSBackgroundThread(
+                coops_stations, 
+                coops_fields, 
+                self.coops_client,
+                self.db_manager,
+                self.service_config
+            )
+            self.coops_thread.daemon = True
+            self.coops_thread.start()
+            log.info(f"CO-OPS background thread started for stations: {coops_stations}")
+        
+        # Start NDBC thread if stations configured
+        ndbc_stations = self.selected_stations.get('ndbc_module', [])
+        if ndbc_stations:
+            ndbc_fields = self.field_mappings.get('ndbc_module', {})
+            self.ndbc_thread = NDBCBackgroundThread(
+                ndbc_stations,
+                ndbc_fields,
+                self.ndbc_client,
+                self.db_manager,
+                self.service_config
+            )
+            self.ndbc_thread.daemon = True
+            self.ndbc_thread.start()
+            log.info(f"NDBC background thread started for stations: {ndbc_stations}")
+
+    def _start_health_monitor(self):
+        """ITEM 10: Start background thread health monitoring"""
+        self.health_monitor = ThreadHealthMonitor(
+            service=self,
+            check_interval=300  # Check every 5 minutes
+        )
+        self.health_monitor.daemon = True
+        self.health_monitor.start()
+        log.info("Thread health monitor started")
+        
 
 class ThreadHealthMonitor(threading.Thread):
     """ITEM 10: Background thread health monitoring and restart capability"""
