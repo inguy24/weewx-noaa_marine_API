@@ -519,7 +519,7 @@ class MarineDataConfigurator:
             
             # Sort by distance and return closest stations
             nearby_stations.sort(key=lambda x: x['distance'])
-            return nearby_stations[:5]
+            return nearby_stations[:10]
             
         except Exception as e:
             print(f"{CORE_ICONS['warning']} Error discovering NDBC stations: {e}")
