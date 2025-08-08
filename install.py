@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-# Magic Animal: Mako
+# Magic Animal: Snail
 """
-WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
-
-ARCHITECTURAL FIXES:
-- DELETED: 600+ lines of custom database code (MarineDatabaseManager class)
-- USES: WeeWX 5.1 database managers following existing YAML-driven patterns
-- PRESERVES: All existing YAML structure and data-driven field routing
-- ENHANCED: tide_table with 7-day rolling predictions (YAML updated)
+WeeWX Marine Data Extension Installer
 
 Copyright 2025 Shane Burkhardt
 """
@@ -35,6 +29,7 @@ try:
     import weewx.manager
     import weewx
     import weeutil.logger
+    log = weeutil.logger.logging.getLogger(__name__)
 except ImportError:
     print("Error: This installer requires WeeWX 5.1 or later")
     sys.exit(1)
@@ -58,6 +53,8 @@ class InstallationProgressManager:
     def __init__(self):
         self.spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self.current_step = 0
+        self.spinner_active = False
+        self.spinner_thread = None
         
     def show_step_progress(self, step_name, current=None, total=None):
         """Show progress for a step with optional counter"""
@@ -75,6 +72,39 @@ class InstallationProgressManager:
         """Show step error"""
         print(f"\r  {step_name}... {CORE_ICONS['warning']}  {error_msg}")
 
+    def start_spinner(self, step_name):
+        """Start animated spinner for long operations"""
+        import threading
+        import time
+        
+        self.spinner_active = True
+        self.current_step = 0
+        
+        def animate():
+            while self.spinner_active:
+                char = self.spinner_chars[self.current_step % len(self.spinner_chars)]
+                print(f"\r  {step_name}... {char}", end='', flush=True)
+                self.current_step += 1
+                time.sleep(0.5)
+        
+        self.spinner_thread = threading.Thread(target=animate, daemon=True)
+        self.spinner_thread.start()
+    
+    def stop_spinner(self, step_name, success=True, error_msg=None):
+        """Stop spinner and show completion or error"""
+        self.spinner_active = False
+        if self.spinner_thread:
+            self.spinner_thread.join(timeout=1)
+        
+        if success:
+            print(f"\r  {step_name}... {CORE_ICONS['status']}")
+        else:
+            icon = CORE_ICONS['warning']
+            if error_msg:
+                print(f"\r  {step_name}... {icon}  {error_msg}")
+            else:
+                print(f"\r  {step_name}... {icon}")
+                
         
 class MarineDataInstaller(ExtensionInstaller):
     """
@@ -309,14 +339,20 @@ class MarineDataConfigurator:
         """
         PRESERVE: Existing interactive setup flow with YAML-driven patterns
         
-        ONLY CHANGE: Reduced output verbosity (30% less output)
+        ONLY CHANGE: Add location line and clean spinner output
         """
         print(f"\n{CORE_ICONS['selection']} Configuring Marine Data Extension")
         
-        # Step 1: PRESERVE - Station discovery using existing patterns
-        print(f"{CORE_ICONS['navigation']} Discovering stations...", end='', flush=True)
+        # NEW: Add location confirmation right after header
+        station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
+        latitude = float(station_config.get('latitude'))
+        longitude = float(station_config.get('longitude'))
+        location_name = station_config.get('location', 'WeeWX Station')
+
+        print(f"Using WeeWX station location: {location_name} ({latitude:.4f}, {longitude:.4f})")
+        
+        # Step 1: UPDATED - Station discovery using animated spinners
         self._discover_and_select_stations()
-        print(f" {CORE_ICONS['status']}")
         
         # Step 2: PRESERVE - Field selection using existing YAML patterns  
         print(f"{CORE_ICONS['selection']} Selecting fields...", end='', flush=True)
@@ -337,13 +373,10 @@ class MarineDataConfigurator:
         """
         DATA-DRIVEN: Bounding box CO-OPS station discovery using YAML endpoints
         
-        Finds ALL station types for comprehensive tide prediction coverage:
-        - Tide prediction stations (harmonic and subordinate)  
-        - Water level observation stations
-        - Current observation and prediction stations
+        SURGICAL CHANGE: Move verbose output to debug logging
         """
         try:
-            print(f"Discovering CO-OPS stations for lat={latitude}, lon={longitude}, radius={radius_miles} miles")
+            log.debug(f"Discovering CO-OPS stations for lat={latitude}, lon={longitude}, radius={radius_miles} miles")
             
             # Get API URLs from YAML configuration (DATA-DRIVEN)
             api_modules = self.yaml_data.get('api_modules', {})
@@ -353,7 +386,7 @@ class MarineDataConfigurator:
             products_url_template = coops_config.get('products_url', '')
             
             if not stations_url:
-                print(f"{CORE_ICONS['warning']} No CO-OPS metadata URL found in YAML")
+                log.error("No CO-OPS metadata URL found in YAML")
                 return []
             
             # Calculate bounding box (BOUNDING BOX APPROACH like GClunies)
@@ -361,7 +394,7 @@ class MarineDataConfigurator:
             lat_coords = [latitude - radius_degrees, latitude + radius_degrees]
             lon_coords = [longitude - radius_degrees, longitude + radius_degrees]
             
-            print(f"Using bounding box: lat {lat_coords}, lon {lon_coords}")
+            log.debug(f"Using bounding box: lat {lat_coords}, lon {lon_coords}")
             
             # Discover ALL station types for comprehensive coverage
             station_types = ['tidepredictions', 'waterlevels', 'currents']
@@ -377,15 +410,15 @@ class MarineDataConfigurator:
                     url_params = urllib.parse.urlencode(params)
                     full_url = f"{stations_url}?{url_params}"
                     
-                    print(f"Fetching {station_type} stations from API...")
+                    log.debug(f"Fetching {station_type} stations from API...")
                     
                     response = urllib.request.urlopen(full_url, timeout=30)
                     data = json.loads(response.read().decode('utf-8'))
                     
                     stations_list = data.get('stations', [])
-                    print(f"Found {len(stations_list)} {station_type} stations")
+                    log.debug(f"Found {len(stations_list)} {station_type} stations")
                     
-                    # Filter stations within bounding box (BOUNDING BOX FILTERING)
+                    # Filter stations within bounding box (PRESERVE ALL EXISTING LOGIC)
                     for station_data in stations_list:
                         try:
                             station_lat = float(station_data.get('lat', 0))
@@ -412,26 +445,26 @@ class MarineDataConfigurator:
                             continue
                             
                 except Exception as e:
-                    print(f"{CORE_ICONS['warning']} Error fetching {station_type} stations: {e}")
+                    log.debug(f"Error fetching {station_type} stations: {e}")
                     continue
             
-            print(f"Found {len(all_discovered_stations)} unique stations within bounding box")
+            log.debug(f"Found {len(all_discovered_stations)} unique stations within bounding box")
             
             # Sort by distance and take closest stations
             all_discovered_stations.sort(key=lambda x: x['distance'])
             closest_stations = all_discovered_stations[:15]
             
-            print(f"Using {len(closest_stations)} closest stations")
+            log.debug(f"Using {len(closest_stations)} closest stations")
             for i, station in enumerate(closest_stations[:5]):
-                print(f"  {i+1}. {station.get('name')} - {station.get('distance', 0):.1f} miles ({station.get('station_type')})")
+                log.debug(f"  {i+1}. {station.get('name')} - {station.get('distance', 0):.1f} miles ({station.get('station_type')})")
             
-            # Get capabilities for each station (PRESERVE EXISTING CAPABILITY DETECTION)
+            # PRESERVE: Get capabilities for each station (existing capability detection)
             final_stations = []
             for station in closest_stations:
                 station_id = station.get('id')
                 
                 if products_url_template and station_id:
-                    # Use existing capability detection with retry logic
+                    # Use existing capability detection with retry logic (PRESERVE ALL LOGIC)
                     capabilities = []
                     for attempt in range(2):
                         try:
@@ -467,16 +500,17 @@ class MarineDataConfigurator:
                 
                 final_stations.append(station)
             
-            print(f"Returning {len(final_stations)} stations with capabilities")
+            log.debug(f"Returning {len(final_stations)} stations with capabilities")
             return final_stations
             
         except Exception as e:
-            print(f"{CORE_ICONS['warning']} Error in CO-OPS station discovery: {e}")
+            log.error(f"Error in CO-OPS station discovery: {e}")
             return []
    
     def _discover_ndbc_stations(self, latitude, longitude):
         """
         PRESERVE: Existing NDBC station discovery patterns
+        SURGICAL CHANGE: Move verbose output to debug logging
         """
         try:
             # Get NDBC metadata URL from YAML configuration
@@ -513,12 +547,11 @@ class MarineDataConfigurator:
             
             # Sort by distance and return closest stations
             nearby_stations.sort(key=lambda x: x['distance'])
+            log.debug(f"Found {len(nearby_stations)} NDBC stations within 100 miles")
             return nearby_stations[:10]
             
         except Exception as e:
-            print(f"{CORE_ICONS['warning']} Error discovering NDBC stations: {e}")
-            # Return empty list on error, no fallbacks
-            return []
+            log.error(f"Error discovering NDBC stations: {e}")
 
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """
@@ -1078,30 +1111,37 @@ class MarineDataConfigurator:
 
     def _discover_and_select_stations(self):
         """
-        MODIFIED: Add curses interface call to existing method
+        MODIFIED: Add animated spinner, move location print to run_interactive_setup
         """
-
+        # REMOVED: Location print (moved to run_interactive_setup)
         station_config = self.config_dict.get('Station', {}) if self.config_dict else {}
-        latitude = float(station_config.get('latitude', 33.6595))
-        longitude = float(station_config.get('longitude', -117.9988))
-        location_name = station_config.get('location', 'WeeWX Station')
-        print(f"Using WeeWX station location: {location_name} ({latitude:.4f}, {longitude:.4f})")
+        latitude = float(station_config.get('latitude'))
+        longitude = float(station_config.get('longitude'))
+        # REMOVED: location_name and print (moved up)
 
         self.user_latitude = latitude
         self.user_longitude = longitude
 
-        # Discover stations with progress indicator
+        # UPDATED: Discover stations with animated spinner
         progress = InstallationProgressManager()
         
-        progress.show_step_progress("Discovering CO-OPS stations")
+        progress.start_spinner("Discovering CO-OPS stations")
         coops_stations = self._discover_coops_stations(latitude, longitude)
         enhanced_coops = self._enhance_coops_stations_with_capabilities(coops_stations)
-        progress.complete_step("Discovering CO-OPS stations")
+        # Check for failure
+        if not enhanced_coops:
+            progress.stop_spinner("Discovering CO-OPS stations", success=False, error_msg="No stations found")
+        else:
+            progress.stop_spinner("Discovering CO-OPS stations", success=True)
         
-        progress.show_step_progress("Discovering NDBC stations")
+        progress.start_spinner("Discovering NDBC stations")
         ndbc_stations = self._discover_ndbc_stations(latitude, longitude)
         enhanced_ndbc = self._enhance_ndbc_stations_with_capabilities(ndbc_stations)
-        progress.complete_step("Discovering NDBC stations")
+        # Check for failure
+        if not enhanced_ndbc:
+            progress.stop_spinner("Discovering NDBC stations", success=False, error_msg="No stations found")
+        else:
+            progress.stop_spinner("Discovering NDBC stations", success=True)
         
         # NEW: Use curses interface for selection
         selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
