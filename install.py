@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Great White Shark
+# Magic Animal: Mako
 """
 WeeWX Marine Data Extension Installer - DATA DRIVEN Architecture
 
@@ -745,7 +745,7 @@ class MarineDataConfigurator:
                     return []
             
             # Return selected stations
-            return [stations[i] for i in selected_indices]
+            return [stations[i].get('id', str(stations[i])) for i in selected_indices]
         
         try:
             return curses.wrapper(station_selection_screen)
