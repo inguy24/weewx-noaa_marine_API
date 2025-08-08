@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Mule
+# Secret Animal: Sheep
 """
 WeeWX Marine Data Extension - FUNCTIONAL Core Service
 
@@ -87,8 +87,47 @@ class MarineDataService(StdService):
             self.db_manager = engine.db_binder.get_manager('wx_binding')
             log.info("Marine Data service using WeeWX database manager")
         except Exception as e:
-            log.error(f"Error getting next tide: {e}")
-        return None
+            log.error(f"Error initializing database manager: {e}")
+            self.service_enabled = False
+            return
+        
+        # Load configuration
+        self.selected_stations = self._load_station_selection()
+        self.field_mappings = self._load_field_mappings()
+        
+        # Validate configuration
+        if not self.validate_essential_config():
+            log.error("Configuration validation failed - service disabled")
+            self.service_enabled = False
+            return
+            
+        if not self.selected_stations:
+            log.error("No stations selected - service disabled")
+            self.service_enabled = False
+            return
+            
+        if not self.field_mappings:
+            log.error("No field mappings found - service disabled")
+            self.service_enabled = False
+            return
+        
+        # Initialize API clients
+        timeout = int(self.service_config.get('timeout', 30))
+        retry_attempts = int(self.service_config.get('retry_attempts', 3))
+        
+        self.coops_client = COOPSAPIClient(timeout=timeout, retry_attempts=retry_attempts)
+        self.ndbc_client = NDBCAPIClient(timeout=timeout)
+        
+        # Start background data collection threads
+        self._start_background_threads()
+        
+        # Start thread health monitoring
+        self._start_health_monitor()
+        
+        # NO binding to NEW_ARCHIVE_RECORD - we use dedicated tables
+        
+        log.info("Marine Data service initialized successfully")
+        self.service_enabled = True
 
     def _get_today_tides(self, db_manager):
         """Get all tides for today"""
@@ -166,6 +205,90 @@ class MarineDataService(StdService):
         except Exception as e:
             log.error(f"Error getting week tides: {e}")
         return {}
+
+    def _load_station_selection(self):
+        """SUCCESS MANUAL PATTERN: Load station selection from config_dict"""
+        # Step 1: Get service section
+        service_config = self.config_dict.get('MarineDataService', {})
+        
+        # Step 2: Get selected_stations subsection
+        selected_stations_config = service_config.get('selected_stations', {})
+        
+        stations = {}
+        
+        # Step 3: Get module data - coops_stations
+        coops_stations = selected_stations_config.get('coops_stations', {})
+        if coops_stations:
+            enabled_coops = [station_id for station_id, enabled in coops_stations.items() if enabled.lower() == 'true']
+            if enabled_coops:
+                stations['coops_module'] = enabled_coops
+        
+        # Step 3: Get module data - ndbc_stations
+        ndbc_stations = selected_stations_config.get('ndbc_stations', {})
+        if ndbc_stations:
+            enabled_ndbc = [station_id for station_id, enabled in ndbc_stations.items() if enabled.lower() == 'true']
+            if enabled_ndbc:
+                stations['ndbc_module'] = enabled_ndbc
+        
+        log.info(f"Loaded station selection: {stations}")
+        return stations
+
+    def _load_field_mappings(self):
+        """SUCCESS MANUAL PATTERN: Load field mappings from config_dict"""
+        # Step 1: Get service section
+        service_config = self.config_dict.get('MarineDataService', {})
+        
+        # Step 2: Get field_mappings subsection
+        field_mappings = service_config.get('field_mappings', {})
+        
+        log.info(f"Loaded field mappings for {len(field_mappings)} modules")
+        return field_mappings
+
+    def validate_essential_config(self):
+        """ITEM 2: Validate that all essential configuration sections are present"""
+        required_sections = [
+            'selected_stations',   # Station configuration
+            'field_mappings',      # Data extraction mappings
+        ]
+        
+        errors = []
+        
+        for section in required_sections:
+            if section not in self.service_config:
+                errors.append(f"Missing required configuration section: {section}")
+        
+        # Validate selected_stations structure
+        selected_stations = self.service_config.get('selected_stations', {})
+        if not any(selected_stations.values()):
+            errors.append("No stations enabled in selected_stations configuration")
+        
+        # Validate field_mappings structure
+        field_mappings = self.service_config.get('field_mappings', {})
+        if not field_mappings:
+            errors.append("No field mappings found in configuration")
+        else:
+            for module_name, module_fields in field_mappings.items():
+                if not isinstance(module_fields, dict):
+                    errors.append(f"Invalid field mappings structure for module: {module_name}")
+                    continue
+                
+                for field_name, field_config in module_fields.items():
+                    if not isinstance(field_config, dict):
+                        errors.append(f"Invalid field config for {module_name}.{field_name}")
+                        continue
+                    
+                    required_keys = ['database_field', 'database_table']
+                    for key in required_keys:
+                        if key not in field_config:
+                            errors.append(f"Missing {key} in {module_name}.{field_name}")
+        
+        if errors:
+            for error in errors:
+                log.error(f"Configuration validation error: {error}")
+            return False
+        
+        log.info("Configuration validation passed")
+        return True
 
 
 class ThreadHealthMonitor(threading.Thread):
