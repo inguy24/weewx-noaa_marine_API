@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Chicken
+# Secret Animal: Rooster
 """
 WeeWX Marine Data Extension - FUNCTIONAL Core Service
 
@@ -1167,7 +1167,7 @@ class COOPSBackgroundThread(threading.Thread):
                 log.error(f"Error collecting predictions for station {station_id}: {e}")
 
     def _insert_coops_data(self, station_id, data):
-        """FUNCTIONAL: Insert CO-OPS data using WeeWX manager"""
+        """FUNCTIONAL: Insert CO-OPS data using WeeWX manager with database-aware SQL"""
         current_time = int(time.time())
         
         # Build insert data
@@ -1188,23 +1188,19 @@ class COOPSBackgroundThread(threading.Thread):
             insert_data['marine_coastal_water_temp'] = temp_data.get('value')
             insert_data['marine_water_temp_flags'] = temp_data.get('flags')
         
-        # Build and execute SQL
+        # Build and execute database-aware SQL
         fields = list(insert_data.keys())
-        placeholders = ['?'] * len(fields)
         values = list(insert_data.values())
         
-        sql = f"""
-            INSERT OR REPLACE INTO coops_realtime 
-            ({', '.join(fields)})
-            VALUES ({', '.join(placeholders)})
-        """
+        # Use database-aware upsert SQL
+        sql = self._get_upsert_sql('coops_realtime', fields)
         
-        # FUNCTIONAL: Actually execute SQL
+        # Execute using WeeWX manager
         self.db_manager.connection.execute(sql, values)
         log.debug(f"Inserted CO-OPS data for station {station_id}")
 
     def _insert_tide_predictions(self, station_id, data):
-        """FUNCTIONAL: Insert tide predictions using WeeWX manager"""
+        """FUNCTIONAL: Insert tide predictions using WeeWX manager with database-aware SQL"""
         current_time = int(time.time())
         
         # Clean up old predictions
@@ -1225,13 +1221,11 @@ class COOPSBackgroundThread(threading.Thread):
                 current_date = datetime.fromtimestamp(current_time)
                 days_ahead = (prediction_date.date() - current_date.date()).days
                 
-                sql = """
-                    INSERT OR REPLACE INTO tide_table 
-                    (dateTime, station_id, tide_time, tide_type, predicted_height, datum, days_ahead)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """
+                # Use database-aware upsert SQL
+                fields = ['dateTime', 'station_id', 'tide_time', 'tide_type', 'predicted_height', 'datum', 'days_ahead']
+                sql = self._get_upsert_sql('tide_table', fields)
                 
-                # FUNCTIONAL: Actually execute SQL
+                # Execute using WeeWX manager
                 self.db_manager.connection.execute(sql, (
                     current_time, station_id, tide_time, tide_type, height, 'MLLW', days_ahead
                 ))
@@ -1241,6 +1235,33 @@ class COOPSBackgroundThread(threading.Thread):
         
         log.debug(f"Updated tide predictions for station {station_id}")
 
+    def _get_database_type(self):
+        """Detect database type through WeeWX manager connection"""
+        try:
+            # Test for MySQL/MariaDB by trying MySQL-specific function
+            cursor = self.db_manager.connection.cursor()
+            cursor.execute("SELECT VERSION()")
+            cursor.fetchone()
+            cursor.close()
+            return 'mysql'
+        except Exception:
+            # If MySQL command fails, assume SQLite
+            return 'sqlite'
+
+    def _get_upsert_sql(self, table_name, fields):
+        """Get database-appropriate upsert SQL through WeeWX manager"""
+        field_list = ', '.join(fields)
+        placeholders = ', '.join(['?' if self._get_database_type() == 'sqlite' else '%s'] * len(fields))
+        
+        db_type = self._get_database_type()
+        
+        if db_type == 'mysql':
+            # MySQL/MariaDB syntax
+            return f"REPLACE INTO {table_name} ({field_list}) VALUES ({placeholders})"
+        else:
+            # SQLite syntax
+            return f"INSERT OR REPLACE INTO {table_name} ({field_list}) VALUES ({placeholders})"
+    
 
 class NDBCBackgroundThread(threading.Thread):
     """
@@ -1294,7 +1315,7 @@ class NDBCBackgroundThread(threading.Thread):
                 log.error(f"Error collecting NDBC data for station {station_id}: {e}")
 
     def _insert_ndbc_data(self, station_id, data):
-        """FUNCTIONAL: Insert NDBC data using WeeWX manager"""
+        """FUNCTIONAL: Insert NDBC data using WeeWX manager with database-aware SQL"""
         current_time = int(time.time())
         
         # Build insert data with unit conversions
@@ -1327,22 +1348,44 @@ class NDBCBackgroundThread(threading.Thread):
                 except (ValueError, TypeError):
                     continue
         
-        # Build and execute SQL
+        # Build and execute database-aware SQL
         if len(insert_data) > 2:  # More than just dateTime and station_id
             fields = list(insert_data.keys())
-            placeholders = ['?'] * len(fields)
             values = list(insert_data.values())
             
-            sql = f"""
-                INSERT OR REPLACE INTO ndbc_data 
-                ({', '.join(fields)})
-                VALUES ({', '.join(placeholders)})
-            """
+            # Use database-aware upsert SQL
+            sql = self._get_upsert_sql('ndbc_data', fields)
             
-            # FUNCTIONAL: Actually execute SQL
+            # Execute using WeeWX manager
             self.db_manager.connection.execute(sql, values)
             log.debug(f"Inserted NDBC data for station {station_id}")
 
+    def _get_database_type(self):
+        """Detect database type through WeeWX manager connection"""
+        try:
+            # Test for MySQL/MariaDB by trying MySQL-specific function
+            cursor = self.db_manager.connection.cursor()
+            cursor.execute("SELECT VERSION()")
+            cursor.fetchone()
+            cursor.close()
+            return 'mysql'
+        except Exception:
+            # If MySQL command fails, assume SQLite
+            return 'sqlite'
+
+    def _get_upsert_sql(self, table_name, fields):
+        """Get database-appropriate upsert SQL through WeeWX manager"""
+        field_list = ', '.join(fields)
+        placeholders = ', '.join(['?' if self._get_database_type() == 'sqlite' else '%s'] * len(fields))
+        
+        db_type = self._get_database_type()
+        
+        if db_type == 'mysql':
+            # MySQL/MariaDB syntax
+            return f"REPLACE INTO {table_name} ({field_list}) VALUES ({placeholders})"
+        else:
+            # SQLite syntax
+            return f"INSERT OR REPLACE INTO {table_name} ({field_list}) VALUES ({placeholders})"
 
 class COOPSAPIClient:
     """
