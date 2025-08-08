@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Seahorse
+# Magic Animal: Portugese Man O'War
 """
 WeeWX Marine Data Extension Installer
 
@@ -509,7 +509,7 @@ class MarineDataConfigurator:
    
     def _discover_ndbc_stations(self, latitude, longitude):
         """
-        Discover NDBC stations within range, filtering out C-MAN and NOS stations
+        Discover NDBC stations within range, filtering out only C-MAN coastal stations
         """
         try:
             # Get NDBC metadata URL from YAML configuration
@@ -532,8 +532,11 @@ class MarineDataConfigurator:
                     station_lon = float(station.get('lon', 0))
                     station_owner = station.get('owner', '')
                     
-                    # Filter to include only true NDBC stations
-                    if station_owner != 'NDBC':
+                    # Filter out problematic C-MAN coastal stations (not true NDBC buoys)
+                    # Keep stations unless they have obvious C-MAN indicators
+                    if (station_owner in ['NOS', 'USCG'] or 
+                        any(cman_indicator in station_name.upper() for cman_indicator in 
+                            ['PIER', 'BRIDGE', 'HARBOR', 'PORT', 'WHARF', 'DOCK'])):
                         continue
                     
                     # Calculate distance
@@ -656,7 +659,7 @@ class MarineDataConfigurator:
 
     def _curses_station_page(self, stations, page_title):
         """
-        FIXED: Curses interface with proper spacing and scrolling
+        Curses interface with proper spacing, scrolling, and cardinal bearing display
         """
         def station_selection_screen(stdscr):
             curses.curs_set(0)  # Hide cursor
@@ -711,13 +714,19 @@ class MarineDataConfigurator:
                     # Selection indicator
                     checkbox = "[X]" if i in selected_indices else "[ ]"
                     
-                    # Station info line
+                    # Station info line with cardinal bearing
                     distance = station.get('distance', 0)
+                    cardinal = station.get('cardinal', '')  # Extract cardinal bearing
                     station_name = station.get('name', 'Unknown')
                     station_id = station.get('id', 'N/A')
                     state = station.get('state', '')
                     
-                    station_line = f"{checkbox} {station_name} ({station_id}) - {distance:.1f} mi"
+                    # Include cardinal bearing in display when available
+                    if cardinal:
+                        station_line = f"{checkbox} {station_name} ({station_id}) - {distance:.1f} mi {cardinal}"
+                    else:
+                        station_line = f"{checkbox} {station_name} ({station_id}) - {distance:.1f} mi"
+                    
                     if state:
                         station_line += f" [{state}]"
                     
