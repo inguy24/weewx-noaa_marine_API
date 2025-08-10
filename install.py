@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Magic Animal: Portugese Man O'War
+# Magic Animal: Blue Bottle
 """
 WeeWX Marine Data Extension Installer
 
@@ -1271,6 +1271,8 @@ class MarineDataConfigurator:
             endpoint_config['base_url'] = module_config.get('api_url', '')
             endpoint_config['timeout'] = str(module_config.get('timeout', 30))
             endpoint_config['retry_attempts'] = str(module_config.get('retry_attempts', 3))
+
+        self._write_station_metadata(config)
         
         return config
 
@@ -1377,6 +1379,74 @@ class MarineDataConfigurator:
         # Each direction covers 22.5 degrees
         index = round(bearing / 22.5) % 16
         return directions[index]
+
+    def _write_station_metadata(self, config):
+        """
+        NEW METHOD: Write station metadata to CONF for Phase II analysis
+        
+        Uses data already collected during Phase I installation:
+        - enhanced_coops_stations: Enhanced CO-OPS stations with capabilities
+        - enhanced_ndbc_stations: Enhanced NDBC stations with capabilities  
+        - Calculated distances from _discover_and_select_stations()
+        - Capability detection from _test_ndbc_station_real_data()
+        
+        This allows Phase II to analyze station coverage without duplicating
+        discovery logic or making additional API calls.
+        """
+        # Only write metadata if we have station data
+        if not (hasattr(self, 'enhanced_coops_stations') or hasattr(self, 'enhanced_ndbc_stations')):
+            return
+        
+        metadata_section = config['MarineDataService'].setdefault('station_metadata', {})
+        
+        # Write CO-OPS station metadata (from existing enhanced_coops_stations)
+        if hasattr(self, 'enhanced_coops_stations') and self.enhanced_coops_stations:
+            coops_metadata = metadata_section.setdefault('coops_stations', {})
+            
+            for station in self.enhanced_coops_stations:
+                # Only write metadata for selected stations
+                if station.get('selected', False):
+                    station_id = station['id']
+                    coops_metadata[station_id] = {
+                        'name': station.get('name', f'Station {station_id}'),
+                        'latitude': str(station.get('lat', 0.0)),
+                        'longitude': str(station.get('lng', 0.0)),
+                        'distance_miles': str(round(station.get('distance', 0.0), 1)),
+                        'capabilities': ', '.join(station.get('capabilities', [])),
+                        'station_type': 'coops'
+                    }
+        
+        # Write NDBC station metadata (from existing enhanced_ndbc_stations)  
+        if hasattr(self, 'enhanced_ndbc_stations') and self.enhanced_ndbc_stations:
+            ndbc_metadata = metadata_section.setdefault('ndbc_stations', {})
+            
+            for station in self.enhanced_ndbc_stations:
+                # Only write metadata for selected stations
+                if station.get('selected', False):
+                    station_id = station['id']
+                    
+                    # Use existing capability detection from _test_ndbc_station_real_data()
+                    capabilities = station.get('capabilities', [])
+                    has_wave = 'Wave Data' in capabilities
+                    has_atmospheric = 'Atmospheric Data' in capabilities
+                    
+                    # Build capabilities list for Phase II
+                    capabilities_list = []
+                    if has_wave:
+                        capabilities_list.append('wave_data')
+                    if has_atmospheric:
+                        capabilities_list.append('atmospheric_data')
+                    
+                    ndbc_metadata[station_id] = {
+                        'name': station.get('name', f'Buoy {station_id}'),
+                        'latitude': str(station.get('lat', 0.0)),
+                        'longitude': str(station.get('lon', 0.0)),
+                        'distance_miles': str(round(station.get('distance', 0.0), 1)),
+                        'capabilities': ', '.join(capabilities_list),
+                        'wave_capability': 'true' if has_wave else 'false',
+                        'atmospheric_capability': 'true' if has_atmospheric else 'false',
+                        'station_type': 'ndbc'
+                    }
 
 
 class COOPSAPIClient:
