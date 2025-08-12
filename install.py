@@ -1155,12 +1155,30 @@ class MarineDataConfigurator:
             enhanced_ndbc = self._discover_ndbc_stations(latitude, longitude)
             progress.stop_spinner("Discovering NDBC stations", success=bool(enhanced_ndbc))
             
+            # Store enhanced station lists as instance attributes for metadata writing
             self.enhanced_coops_stations = enhanced_coops
             self.enhanced_ndbc_stations = enhanced_ndbc
-
+            
             # Continue with interactive selection
             selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
             self.selected_stations = selected_stations
+            
+            # MARK SELECTED STATIONS IN ENHANCED LISTS
+            # Mark selected CO-OPS stations
+            selected_coops_ids = selected_stations.get('coops_module', [])
+            for station in self.enhanced_coops_stations:
+                if station.get('id') in selected_coops_ids:
+                    station['selected'] = True
+                else:
+                    station['selected'] = False
+            
+            # Mark selected NDBC stations
+            selected_ndbc_ids = selected_stations.get('ndbc_module', [])
+            for station in self.enhanced_ndbc_stations:
+                if station.get('id') in selected_ndbc_ids:
+                    station['selected'] = True
+                else:
+                    station['selected'] = False
             
             return True
             
