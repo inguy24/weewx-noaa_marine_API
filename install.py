@@ -1155,6 +1155,9 @@ class MarineDataConfigurator:
             enhanced_ndbc = self._discover_ndbc_stations(latitude, longitude)
             progress.stop_spinner("Discovering NDBC stations", success=bool(enhanced_ndbc))
             
+            self.enhanced_coops_stations = enhanced_coops
+            self.enhanced_ndbc_stations = enhanced_ndbc
+
             # Continue with interactive selection
             selected_stations = self._interactive_station_selection_curses(enhanced_coops, enhanced_ndbc)
             self.selected_stations = selected_stations
