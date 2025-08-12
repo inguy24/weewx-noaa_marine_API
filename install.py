@@ -548,6 +548,8 @@ class MarineDataConfigurator:
                             nearby_stations.append({
                                 'id': station_id,
                                 'name': station_name,
+                                'lat': station_lat,
+                                'lon': station_lon,
                                 'distance': distance,
                                 'cardinal': cardinal,
                                 'capabilities': capabilities
