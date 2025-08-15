@@ -1032,7 +1032,7 @@ class COOPSBackgroundThread(threading.Thread):
                     marine_next_low_time = ?,
                     marine_next_low_height = ?,
                     marine_tide_range = ?
-                WHERE station_id = ? AND dateTime = ?
+                WHERE station_id = ? AND dateTime = (SELECT MAX(dateTime) FROM tide_table WHERE station_id = ?)
             """
             
             # Execute update
