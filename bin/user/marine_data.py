@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Secret Animal: Pig
+# Secret Animal: Chicken
 """
 WeeWX Marine Data Extension - FUNCTIONAL Core Service
 
@@ -991,7 +991,7 @@ class COOPSBackgroundThread(threading.Thread):
         
         # Insert using CONF-defined fields - DATA-DRIVEN APPROACH
         for tide_event in tide_events:
-            # Build insert_data dictionary using CONF field mappings
+            # Build insert_data dictionary with core tide data
             insert_data = {
                 'dateTime': current_time,
                 'station_id': station_id,
@@ -1002,23 +1002,21 @@ class COOPSBackgroundThread(threading.Thread):
                 'days_ahead': tide_event['days_ahead']
             }
             
-            # Add summary fields using CONF field mappings
-            # Check if these fields are defined in self.fields configuration
-            tide_fields = self.fields.get('coops_module', {})
-            
-            if 'marine_next_high_time' in tide_fields and next_high:
+            # HARDCODED SUMMARY FIELDS - We calculate these internally, not from API
+            # Note: These are always included because we generate them internally,
+            # not from API responses. They don't need CONF definitions since 
+            # they're our calculated convenience fields, not user-selectable API data.
+            # This violates the normal CONF-driven pattern but is necessary because
+            # these fields are our internal calculations, not API field selections.
+            if next_high:
                 insert_data['marine_next_high_time'] = next_high['tide_time']
-                
-            if 'marine_next_high_height' in tide_fields and next_high:
                 insert_data['marine_next_high_height'] = next_high['height']
                 
-            if 'marine_next_low_time' in tide_fields and next_low:
+            if next_low:
                 insert_data['marine_next_low_time'] = next_low['tide_time']
-                
-            if 'marine_next_low_height' in tide_fields and next_low:
                 insert_data['marine_next_low_height'] = next_low['height']
                 
-            if 'marine_tide_range' in tide_fields and tide_range is not None:
+            if tide_range is not None:
                 insert_data['marine_tide_range'] = tide_range
             
             # Use existing data-driven pattern - build fields/values dynamically
@@ -1034,7 +1032,7 @@ class COOPSBackgroundThread(threading.Thread):
         # 🔧 FIX: Add missing commit (WeeWX 5.1 requirement for runtime services)
         self.db_manager.connection.commit()
         
-        log.debug(f"Updated tide predictions for station {station_id}")
+        log.debug(f"Updated tide predictions for station {station_id} with summary calculations")
 
     def _get_database_type(self):
         """Detect database type through WeeWX manager connection"""
