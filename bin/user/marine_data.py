@@ -990,16 +990,14 @@ class COOPSBackgroundThread(threading.Thread):
                 ORDER BY tide_time ASC
             """
             
-            # Execute query and get cursor result
             result = self.db_manager.connection.execute(sql, (station_id, current_time))
             
-            # Check if result is None
             if result is None:
                 log.warning(f"Query returned None for station {station_id}")
                 return
                 
-            # Get all rows using fetchall() - same as working TideTableSearchList
             rows = result.fetchall()
+            log.debug(f"Found {len(rows)} future tide predictions for station {station_id}")
             
             # Calculate summary values in one pass
             next_high_time = next_high_height = next_low_time = next_low_height = None
@@ -1024,7 +1022,9 @@ class COOPSBackgroundThread(threading.Thread):
             if today_highs and today_lows:
                 tide_range = max(today_highs) - min(today_lows)
             
-            # Update summary fields - use same pattern as other inserts
+            log.debug(f"Calculated values - next_high: {next_high_time}, next_low: {next_low_time}, range: {tide_range}")
+            
+            # Update summary fields
             update_sql = """
                 UPDATE tide_table 
                 SET marine_next_high_time = ?, 
@@ -1035,14 +1035,19 @@ class COOPSBackgroundThread(threading.Thread):
                 WHERE station_id = ? AND dateTime = (SELECT MAX(dateTime) FROM tide_table WHERE station_id = ?)
             """
             
-            # Execute update
-            self.db_manager.connection.execute(update_sql, (
+            # Execute update and check how many rows were affected
+            cursor = self.db_manager.connection.execute(update_sql, (
                 next_high_time, next_high_height, next_low_time, next_low_height, 
-                tide_range, station_id, current_time
+                tide_range, station_id, station_id
             ))
             
-            log.debug(f"Updated tide summaries for station {station_id}: next_high={next_high_time}, next_low={next_low_time}, range={tide_range}")
+            # Check rows affected (SQLite method)
+            affected_rows = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+            log.debug(f"UPDATE affected {affected_rows} rows for station {station_id}")
             
+            if affected_rows == 0:
+                log.warning(f"UPDATE affected 0 rows for station {station_id} - no matching records found")
+                
         except Exception as e:
             log.error(f"Error updating tide summaries for station {station_id}: {e}")
             import traceback
