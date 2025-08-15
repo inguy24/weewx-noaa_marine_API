@@ -1031,6 +1031,9 @@ class COOPSBackgroundThread(threading.Thread):
             # Execute using WeeWX manager - RETAIN EXISTING PATTERN
             self.db_manager.connection.execute(sql, values)
         
+        # 🔧 FIX: Add missing commit (WeeWX 5.1 requirement for runtime services)
+        self.db_manager.connection.commit()
+        
         log.debug(f"Updated tide predictions for station {station_id}")
 
     def _get_database_type(self):
