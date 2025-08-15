@@ -31,7 +31,7 @@ from weeutil.weeutil import to_bool
 
 log = weeutil.logger.logging.getLogger(__name__)
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # CONSISTENT ICONS: Match install.py for consistency
 CORE_ICONS = {
