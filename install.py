@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Magic Animal: Blue Bottle
+# Magic Animal: Starfish
 """
-WeeWX Marine Data Extension Installer
+WeeWX Marine Data Extension Installer v1.0.1
 
 Copyright 2025 Shane Burkhardt
 """
@@ -168,28 +168,39 @@ class MarineDataInstaller(ExtensionInstaller):
 
     def _create_marine_tables_weewx_compliant(self, engine, config_dict, selected_options):
         """
-        ARCHITECTURAL FIX: Create marine tables using WeeWX database manager.
+        DATA-DRIVEN: Create marine tables using YAML field definitions and WeeWX database manager.
         
-        PRESERVE: All YAML-driven field mapping and table routing patterns
-        ENHANCE: tide_table schema for 7-day rolling predictions
-        DELETE: All custom MySQL/SQLite connection code
+        READS FROM: marine_data_fields.yaml database_schema section
+        CREATES: Tables with fields defined in YAML, not hardcoded
+        FOLLOWS: WeeWX 5.1 database manager patterns
         """
         try:
-            # FIXED: Use WeeWX database manager instead of custom connections
+            # Get database schema from YAML (loaded in configurator)
+            configurator = selected_options.get('configurator')
+            if not configurator or not hasattr(configurator, 'yaml_data'):
+                raise RuntimeError("YAML data not available for database schema creation")
+            
+            database_schema = configurator.yaml_data.get('database_schema', {})
+            if not database_schema:
+                raise RuntimeError("Database schema not found in marine_data_fields.yaml")
+            
+            # Use WeeWX database manager instead of custom connections
             with weewx.manager.open_manager_with_config(engine.config_dict, 'wx_binding') as manager:
                 
-                # PRESERVE: DATA-DRIVEN table creation based on field mappings
-                required_tables = self._determine_required_tables_from_yaml(config_dict)
-                
-                for table_name in required_tables:
-                    if table_name == 'coops_realtime':
-                        self._create_coops_realtime_table(manager)
-                    elif table_name == 'tide_table':  # ENHANCED: New 7-day rolling table
-                        self._create_tide_table(manager)
-                    elif table_name == 'ndbc_data':
-                        self._create_ndbc_data_table(manager)
-                
-            print(f"{CORE_ICONS['status']} Marine tables created successfully")
+                # Process each table from YAML database_schema
+                for table_key, table_config in database_schema.items():
+                    if isinstance(table_config, dict) and 'name' in table_config and 'fields' in table_config:
+                        table_name = table_config['name']
+                        table_fields = table_config['fields']
+                        
+                        if table_name == 'coops_realtime':
+                            self._create_coops_realtime_table(manager, table_fields)
+                        elif table_name == 'tide_table':
+                            self._create_tide_table(manager, table_fields)
+                        elif table_name == 'ndbc_data':
+                            self._create_ndbc_data_table(manager, table_fields)
+            
+            print(f"{CORE_ICONS['status']} Marine tables created successfully from YAML schema")
             
         except Exception as e:
             print(f"{CORE_ICONS['warning']} Error creating marine tables: {e}")
@@ -214,63 +225,92 @@ class MarineDataInstaller(ExtensionInstaller):
         
         return required_tables
 
-    def _create_coops_realtime_table(self, manager):
-        """Create coops_realtime table for high-frequency data"""
-        manager.connection.execute("""
-            CREATE TABLE IF NOT EXISTS coops_realtime (
-                dateTime INTEGER NOT NULL,
-                station_id TEXT NOT NULL,
-                marine_current_water_level REAL,
-                marine_water_level_sigma REAL,
-                marine_water_level_flags TEXT,
-                marine_coastal_water_temp REAL,
-                marine_water_temp_flags TEXT,
-                PRIMARY KEY (dateTime, station_id(20)),
-                INDEX idx_recent_coops (station_id(20), dateTime)
-            )
-        """)
-
-    def _create_tide_table(self, manager):
+    def _create_coops_realtime_table(self, manager, table_fields):
         """
-        ENHANCED: Create tide_table for 7-day rolling predictions
+        DATA-DRIVEN: Create coops_realtime table using YAML field definitions
         
-        This replaces the simple coops_predictions table with comprehensive tide tracking
+        READS FROM: YAML database_schema.coops_realtime.fields
+        CREATES: Table with fields defined in YAML, not hardcoded
         """
-        manager.connection.execute("""
-            CREATE TABLE IF NOT EXISTS tide_table (
-                dateTime INTEGER NOT NULL,
-                station_id TEXT NOT NULL,
-                tide_time INTEGER NOT NULL,
-                tide_type TEXT NOT NULL,
-                predicted_height REAL,
-                datum TEXT,
-                days_ahead INTEGER,
-                PRIMARY KEY (station_id(20), tide_time, tide_type(1)),
-                INDEX idx_upcoming_tides (station_id(20), tide_time)
+        # Build field definitions from YAML
+        field_definitions = []
+        for field_name, field_type in table_fields.items():
+            field_definitions.append(f"{field_name} {field_type}")
+        
+        # Add table constraints from YAML or defaults
+        constraints = [
+            "PRIMARY KEY (dateTime, station_id(20))",
+            "INDEX idx_recent_coops (station_id(20), dateTime)"
+        ]
+        
+        # Combine fields and constraints
+        all_definitions = field_definitions + constraints
+        
+        # Create table with YAML-defined fields
+        create_sql = f"""
+            CREATE TABLE IF NOT EXISTS coops_realtime (
+                {', '.join(all_definitions)}
             )
-        """)
+        """
+        manager.connection.execute(create_sql)
 
-    def _create_ndbc_data_table(self, manager):
-        """Create ndbc_data table for buoy observations"""
-        manager.connection.execute("""
-            CREATE TABLE IF NOT EXISTS ndbc_data (
-                dateTime INTEGER NOT NULL,
-                station_id TEXT NOT NULL,
-                marine_wave_height REAL,
-                marine_wave_period REAL,
-                marine_wave_direction REAL,
-                marine_wind_speed REAL,
-                marine_wind_direction REAL,
-                marine_wind_gust REAL,
-                marine_air_temp REAL,
-                marine_sea_surface_temp REAL,
-                marine_barometric_pressure REAL,
-                marine_visibility REAL,
-                marine_dewpoint REAL,
-                PRIMARY KEY (dateTime, station_id(20)),
-                INDEX idx_recent_ndbc (station_id(20), dateTime)
+    def _create_tide_table(self, manager, table_fields):
+        """
+        DATA-DRIVEN: Create tide_table using YAML field definitions
+        
+        READS FROM: YAML database_schema.tide_table.fields  
+        CREATES: Table with fields defined in YAML, not hardcoded
+        """
+        # Build field definitions from YAML
+        field_definitions = []
+        for field_name, field_type in table_fields.items():
+            field_definitions.append(f"{field_name} {field_type}")
+        
+        # Add table constraints from YAML or defaults
+        constraints = [
+            "PRIMARY KEY (station_id(20), tide_time, tide_type(1))",
+            "INDEX idx_upcoming_tides (station_id(20), tide_time)"
+        ]
+        
+        # Combine fields and constraints
+        all_definitions = field_definitions + constraints
+        
+        # Create table with YAML-defined fields
+        create_sql = f"""
+            CREATE TABLE IF NOT EXISTS tide_table (
+                {', '.join(all_definitions)}
             )
-        """)
+        """
+        manager.connection.execute(create_sql)
+
+    def _create_ndbc_data_table(self, manager, table_fields):
+        """
+        DATA-DRIVEN: Create ndbc_data table using YAML field definitions
+        
+        READS FROM: YAML database_schema.ndbc_data.fields
+        CREATES: Table with fields defined in YAML, not hardcoded
+        """
+        # Build field definitions from YAML
+        field_definitions = []
+        for field_name, field_type in table_fields.items():
+            field_definitions.append(f"{field_name} {field_type}")
+        
+        # Add table constraints from YAML or defaults
+        constraints = [
+            "PRIMARY KEY (dateTime, station_id(20))",
+            "INDEX idx_recent_ndbc (station_id(20), dateTime)"
+        ]
+        
+        # Combine fields and constraints
+        all_definitions = field_definitions + constraints
+        
+        # Create table with YAML-defined fields
+        create_sql = f"""
+            CREATE TABLE IF NOT EXISTS ndbc_data (
+                {', '.join(all_definitions)}
+            )
+        """
+        manager.connection.execute(create_sql)
 
 
 class MarineDataConfigurator:
