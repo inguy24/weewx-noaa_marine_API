@@ -6,7 +6,7 @@
 
 set -e
 
-VERSION="1.0.0-alpha"
+VERSION="1.0.1-beta"
 EXTENSION_NAME="weewx-marine-data"
 PACKAGE_NAME="${EXTENSION_NAME}-${VERSION}"
 BUILD_DIR="build"
