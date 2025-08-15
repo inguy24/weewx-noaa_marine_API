@@ -286,26 +286,39 @@ class MarineDataInstaller(ExtensionInstaller):
 
     def _create_tide_table(self, manager, table_fields):
         """
-        DATA-DRIVEN: Create tide_table using YAML field definitions
+        DATA-DRIVEN: Create tide_table using YAML field definitions + required operational fields
         
-        READS FROM: YAML database_schema.tide_table.fields  
-        CREATES: Table with fields defined in YAML, not hardcoded
+        READS FROM: YAML field definitions for tide_table
+        CREATES: Table with YAML fields + operational fields needed by service
         """
-        # Build field definitions from YAML
+        # Build field definitions from YAML user-facing fields
         field_definitions = []
         for field_name, field_type in table_fields.items():
             field_definitions.append(f"{field_name} {field_type}")
         
-        # Add table constraints from YAML or defaults
+        # Add required operational fields for tide_table service functionality
+        # These are NOT in YAML but required for the service to work
+        operational_fields = [
+            "tide_time INTEGER NOT NULL",
+            "tide_type TEXT NOT NULL", 
+            "predicted_height REAL",
+            "datum TEXT",
+            "days_ahead INTEGER"
+        ]
+        
+        # Combine YAML fields + operational fields
+        all_field_definitions = field_definitions + operational_fields
+        
+        # Use operational fields for primary key
         constraints = [
-            "PRIMARY KEY (station_id(20), tide_time, tide_type(1))",
-            "INDEX idx_upcoming_tides (station_id(20), tide_time)"
+            "PRIMARY KEY (station_id, tide_time, tide_type)",
+            "INDEX idx_upcoming_tides (station_id, tide_time)"
         ]
         
         # Combine fields and constraints
-        all_definitions = field_definitions + constraints
+        all_definitions = all_field_definitions + constraints
         
-        # Create table with YAML-defined fields
+        # Create table with YAML + operational fields
         create_sql = f"""
             CREATE TABLE IF NOT EXISTS tide_table (
                 {', '.join(all_definitions)}
