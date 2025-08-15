@@ -258,16 +258,13 @@ class MarineDataInstaller(ExtensionInstaller):
     def _create_coops_realtime_table(self, manager, table_fields):
         """
         DATA-DRIVEN: Create coops_realtime table using YAML field definitions
-        
-        READS FROM: YAML database_schema.coops_realtime.fields
-        CREATES: Table with fields defined in YAML, not hardcoded
         """
         # Build field definitions from YAML
         field_definitions = []
         for field_name, field_type in table_fields.items():
             field_definitions.append(f"{field_name} {field_type}")
         
-        # Add table constraints from YAML or defaults
+        # Add table constraints with MySQL-compatible key length
         constraints = [
             "PRIMARY KEY (dateTime, station_id(20))",
             "INDEX idx_recent_coops (station_id(20), dateTime)"
@@ -287,17 +284,13 @@ class MarineDataInstaller(ExtensionInstaller):
     def _create_tide_table(self, manager, table_fields):
         """
         DATA-DRIVEN: Create tide_table using YAML field definitions + required operational fields
-        
-        READS FROM: YAML field definitions for tide_table
-        CREATES: Table with YAML fields + operational fields needed by service
         """
         # Build field definitions from YAML user-facing fields
         field_definitions = []
         for field_name, field_type in table_fields.items():
             field_definitions.append(f"{field_name} {field_type}")
         
-        # Add required operational fields for tide_table service functionality
-        # These are NOT in YAML but required for the service to work
+        # Add required operational fields that marine_data.py service uses
         operational_fields = [
             "tide_time INTEGER NOT NULL",
             "tide_type TEXT NOT NULL", 
@@ -309,10 +302,10 @@ class MarineDataInstaller(ExtensionInstaller):
         # Combine YAML fields + operational fields
         all_field_definitions = field_definitions + operational_fields
         
-        # Use operational fields for primary key
+        # Use operational fields for primary key with MySQL-compatible key length
         constraints = [
-            "PRIMARY KEY (station_id, tide_time, tide_type)",
-            "INDEX idx_upcoming_tides (station_id, tide_time)"
+            "PRIMARY KEY (station_id(20), tide_time, tide_type(1))",
+            "INDEX idx_upcoming_tides (station_id(20), tide_time)"
         ]
         
         # Combine fields and constraints
@@ -329,16 +322,13 @@ class MarineDataInstaller(ExtensionInstaller):
     def _create_ndbc_data_table(self, manager, table_fields):
         """
         DATA-DRIVEN: Create ndbc_data table using YAML field definitions
-        
-        READS FROM: YAML database_schema.ndbc_data.fields
-        CREATES: Table with fields defined in YAML, not hardcoded
         """
         # Build field definitions from YAML
         field_definitions = []
         for field_name, field_type in table_fields.items():
             field_definitions.append(f"{field_name} {field_type}")
         
-        # Add table constraints from YAML or defaults
+        # Add table constraints with MySQL-compatible key length
         constraints = [
             "PRIMARY KEY (dateTime, station_id(20))",
             "INDEX idx_recent_ndbc (station_id(20), dateTime)"
