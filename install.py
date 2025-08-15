@@ -149,7 +149,14 @@ class MarineDataInstaller(ExtensionInstaller):
             
             # FIXED: Pass engine to configurator for WeeWX-compliant file access
             configurator = MarineDataConfigurator(engine.config_dict, engine)
-            config_dict, selected_options = configurator.run_interactive_setup()           
+            config_dict, selected_locations = configurator.run_interactive_setup()
+            
+            # CRITICAL: Pass configurator in selected_options for table creation
+            selected_options = {
+                'configurator': configurator,
+                'selected_locations': selected_locations
+            }
+            
             self._create_marine_tables_weewx_compliant(engine, config_dict, selected_options)         
             engine.config_dict.update(config_dict)           
             super().configure(engine)
@@ -175,10 +182,15 @@ class MarineDataInstaller(ExtensionInstaller):
         FOLLOWS: WeeWX 5.1 database manager patterns
         """
         try:
-            # Get database schema from YAML (loaded in configurator)
+            # Get YAML data from the configurator instance that was created
             configurator = selected_options.get('configurator')
-            if not configurator or not hasattr(configurator, 'yaml_data'):
-                raise RuntimeError("YAML data not available for database schema creation")
+            if not configurator:
+                # Fallback: create new configurator to get YAML data
+                configurator = MarineDataConfigurator(engine.config_dict, engine)
+            
+            # Access YAML data from configurator
+            if not hasattr(configurator, 'yaml_data') or not configurator.yaml_data:
+                raise RuntimeError("marine_data_fields.yaml not loaded or empty")
             
             database_schema = configurator.yaml_data.get('database_schema', {})
             if not database_schema:
