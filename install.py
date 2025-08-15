@@ -177,8 +177,8 @@ class MarineDataInstaller(ExtensionInstaller):
         """
         DATA-DRIVEN: Create marine tables using YAML field definitions and WeeWX database manager.
         
-        READS FROM: marine_data_fields.yaml database_schema section
-        CREATES: Tables with fields defined in YAML, not hardcoded
+        READS FROM: marine_data_fields.yaml fields section
+        CREATES: Tables with fields defined in YAML field mappings, not hardcoded
         FOLLOWS: WeeWX 5.1 database manager patterns
         """
         try:
@@ -192,27 +192,45 @@ class MarineDataInstaller(ExtensionInstaller):
             if not hasattr(configurator, 'yaml_data') or not configurator.yaml_data:
                 raise RuntimeError("marine_data_fields.yaml not loaded or empty")
             
-            database_schema = configurator.yaml_data.get('database_schema', {})
-            if not database_schema:
-                raise RuntimeError("Database schema not found in marine_data_fields.yaml")
+            # Get fields from YAML (correct structure)
+            fields = configurator.yaml_data.get('fields', {})
+            if not fields:
+                raise RuntimeError("Field definitions not found in marine_data_fields.yaml")
+            
+            # Group fields by database_table to determine what tables to create
+            tables_to_create = set()
+            for field_name, field_config in fields.items():
+                table_name = field_config.get('database_table', 'archive')
+                if table_name != 'archive':  # Skip archive table
+                    tables_to_create.add(table_name)
             
             # Use WeeWX database manager instead of custom connections
             with weewx.manager.open_manager_with_config(engine.config_dict, 'wx_binding') as manager:
                 
-                # Process each table from YAML database_schema
-                for table_key, table_config in database_schema.items():
-                    if isinstance(table_config, dict) and 'name' in table_config and 'fields' in table_config:
-                        table_name = table_config['name']
-                        table_fields = table_config['fields']
-                        
-                        if table_name == 'coops_realtime':
-                            self._create_coops_realtime_table(manager, table_fields)
-                        elif table_name == 'tide_table':
-                            self._create_tide_table(manager, table_fields)
-                        elif table_name == 'ndbc_data':
-                            self._create_ndbc_data_table(manager, table_fields)
+                # Create each required table based on YAML field mappings
+                for table_name in tables_to_create:
+                    # Build field list for this table from YAML
+                    table_fields = {}
+                    
+                    # Add standard fields that all tables need
+                    table_fields['dateTime'] = 'INTEGER NOT NULL'
+                    table_fields['station_id'] = 'TEXT NOT NULL'
+                    
+                    # Add fields defined in YAML for this table
+                    for field_name, field_config in fields.items():
+                        if field_config.get('database_table') == table_name:
+                            db_field = field_config.get('database_field', field_name)
+                            db_type = field_config.get('database_type', 'REAL')
+                            table_fields[db_field] = db_type
+                    
+                    if table_name == 'coops_realtime':
+                        self._create_coops_realtime_table(manager, table_fields)
+                    elif table_name == 'tide_table':
+                        self._create_tide_table(manager, table_fields)
+                    elif table_name == 'ndbc_data':
+                        self._create_ndbc_data_table(manager, table_fields)
             
-            print(f"{CORE_ICONS['status']} Marine tables created successfully from YAML schema")
+            print(f"{CORE_ICONS['status']} Marine tables created successfully from YAML field definitions")
             
         except Exception as e:
             print(f"{CORE_ICONS['warning']} Error creating marine tables: {e}")
