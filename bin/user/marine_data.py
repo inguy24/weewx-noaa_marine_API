@@ -982,7 +982,7 @@ class COOPSBackgroundThread(threading.Thread):
     def _update_tide_summaries(self, station_id, current_time):
         """Calculate and update next high/low tide summary fields using WeeWX manager connection"""
         try:
-            # Use existing WeeWX connection for all operations
+            # Use the same pattern as the working TideTableSearchList
             sql = """
                 SELECT tide_type, tide_time, predicted_height
                 FROM tide_table 
@@ -990,7 +990,16 @@ class COOPSBackgroundThread(threading.Thread):
                 ORDER BY tide_time ASC
             """
             
-            rows = self.db_manager.connection.execute(sql, (station_id, current_time)).fetchall()
+            # Execute query and get cursor result
+            result = self.db_manager.connection.execute(sql, (station_id, current_time))
+            
+            # Check if result is None
+            if result is None:
+                log.warning(f"Query returned None for station {station_id}")
+                return
+                
+            # Get all rows using fetchall() - same as working TideTableSearchList
+            rows = result.fetchall()
             
             # Calculate summary values in one pass
             next_high_time = next_high_height = next_low_time = next_low_height = None
@@ -1015,7 +1024,7 @@ class COOPSBackgroundThread(threading.Thread):
             if today_highs and today_lows:
                 tide_range = max(today_highs) - min(today_lows)
             
-            # Update summary fields using WeeWX manager
+            # Update summary fields - use same pattern as other inserts
             update_sql = """
                 UPDATE tide_table 
                 SET marine_next_high_time = ?, 
@@ -1026,13 +1035,18 @@ class COOPSBackgroundThread(threading.Thread):
                 WHERE station_id = ? AND dateTime = ?
             """
             
+            # Execute update
             self.db_manager.connection.execute(update_sql, (
                 next_high_time, next_high_height, next_low_time, next_low_height, 
                 tide_range, station_id, current_time
             ))
             
+            log.debug(f"Updated tide summaries for station {station_id}: next_high={next_high_time}, next_low={next_low_time}, range={tide_range}")
+            
         except Exception as e:
             log.error(f"Error updating tide summaries for station {station_id}: {e}")
+            import traceback
+            log.error(traceback.format_exc())
 
     def _get_database_type(self):
         """Detect database type through WeeWX manager connection"""
