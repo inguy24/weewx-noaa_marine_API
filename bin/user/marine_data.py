@@ -944,33 +944,41 @@ class COOPSBackgroundThread(threading.Thread):
         log.debug(f"Inserted CO-OPS data for station {station_id}")
 
     def _insert_tide_predictions(self, station_id, data):
-        """Process tide predictions and calculate summary fields before database insertion"""
+        """Insert tide predictions using CONF-defined fields and calculate summary fields"""
         current_time = int(time.time())
         
-        # Clean up old predictions
+        # Clean up old predictions - RETAIN EXISTING
         cleanup_sql = "DELETE FROM tide_table WHERE station_id = ? AND tide_time < ?"
         yesterday = current_time - 86400
         self.db_manager.connection.execute(cleanup_sql, (station_id, yesterday))
         
-        # STEP 1: Parse and collect all predictions from API
+        # Parse all predictions and calculate summary fields
         tide_events = []
         for prediction in data['predictions']:
-            tide_time_str = prediction.get('t')
-            tide_time = int(datetime.fromisoformat(tide_time_str.replace('Z', '+00:00')).timestamp())
-            tide_type = prediction.get('type', 'H')
-            height = float(prediction.get('v', 0))
-            
-            tide_events.append({
-                'tide_time': tide_time,
-                'tide_type': tide_type, 
-                'height': height
-            })
+            try:
+                tide_time_str = prediction.get('t')
+                tide_time = int(datetime.fromisoformat(tide_time_str.replace('Z', '+00:00')).timestamp())
+                tide_type = prediction.get('type', 'H')
+                height = float(prediction.get('v', 0))
+                
+                # Calculate days ahead - RETAIN EXISTING
+                prediction_date = datetime.fromtimestamp(tide_time)
+                current_date = datetime.fromtimestamp(current_time)
+                days_ahead = (prediction_date.date() - current_date.date()).days
+                
+                tide_events.append({
+                    'tide_time': tide_time,
+                    'tide_type': tide_type,
+                    'height': height,
+                    'days_ahead': days_ahead
+                })
+            except Exception as e:
+                log.error(f"Error parsing tide prediction: {e}")
         
-        # STEP 2: Calculate summary fields from the collected data
+        # Calculate summary fields from parsed data
         future_tides = [t for t in tide_events if t['tide_time'] > current_time]
         future_tides.sort(key=lambda x: x['tide_time'])
         
-        # Find next high and low
         next_high = next((t for t in future_tides if t['tide_type'] == 'H'), None)
         next_low = next((t for t in future_tides if t['tide_type'] == 'L'), None)
         
@@ -981,30 +989,49 @@ class COOPSBackgroundThread(threading.Thread):
         today_lows = [t['height'] for t in today_tides if t['tide_type'] == 'L']
         tide_range = max(today_highs) - min(today_lows) if today_highs and today_lows else None
         
-        # STEP 3: Insert all data including summary fields in ONE operation
+        # Insert using CONF-defined fields - DATA-DRIVEN APPROACH
         for tide_event in tide_events:
-            # Calculate days ahead
-            prediction_date = datetime.fromtimestamp(tide_event['tide_time'])
-            current_date = datetime.fromtimestamp(current_time)
-            days_ahead = (prediction_date.date() - current_date.date()).days
+            # Build insert_data dictionary using CONF field mappings
+            insert_data = {
+                'dateTime': current_time,
+                'station_id': station_id,
+                'tide_time': tide_event['tide_time'],
+                'tide_type': tide_event['tide_type'],
+                'predicted_height': tide_event['height'],
+                'datum': 'MLLW',
+                'days_ahead': tide_event['days_ahead']
+            }
             
-            sql = """
-                INSERT OR REPLACE INTO tide_table 
-                (dateTime, station_id, tide_time, tide_type, predicted_height, datum, days_ahead,
-                marine_next_high_time, marine_next_high_height, 
-                marine_next_low_time, marine_next_low_height, marine_tide_range)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
+            # Add summary fields using CONF field mappings
+            # Check if these fields are defined in self.fields configuration
+            tide_fields = self.fields.get('coops_module', {})
             
-            self.db_manager.connection.execute(sql, (
-                current_time, station_id, tide_event['tide_time'], tide_event['tide_type'], 
-                tide_event['height'], 'MLLW', days_ahead,
-                next_high['tide_time'] if next_high else None,
-                next_high['height'] if next_high else None,
-                next_low['tide_time'] if next_low else None, 
-                next_low['height'] if next_low else None,
-                tide_range
-            ))
+            if 'marine_next_high_time' in tide_fields and next_high:
+                insert_data['marine_next_high_time'] = next_high['tide_time']
+                
+            if 'marine_next_high_height' in tide_fields and next_high:
+                insert_data['marine_next_high_height'] = next_high['height']
+                
+            if 'marine_next_low_time' in tide_fields and next_low:
+                insert_data['marine_next_low_time'] = next_low['tide_time']
+                
+            if 'marine_next_low_height' in tide_fields and next_low:
+                insert_data['marine_next_low_height'] = next_low['height']
+                
+            if 'marine_tide_range' in tide_fields and tide_range is not None:
+                insert_data['marine_tide_range'] = tide_range
+            
+            # Use existing data-driven pattern - build fields/values dynamically
+            fields = list(insert_data.keys())
+            values = list(insert_data.values())
+            
+            # Use existing _get_upsert_sql() method for database compatibility
+            sql = self._get_upsert_sql('tide_table', fields)
+            
+            # Execute using WeeWX manager - RETAIN EXISTING PATTERN
+            self.db_manager.connection.execute(sql, values)
+        
+        log.debug(f"Updated tide predictions for station {station_id}")
 
     def _get_database_type(self):
         """Detect database type through WeeWX manager connection"""
